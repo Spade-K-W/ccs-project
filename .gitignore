@@ -1,0 +1,8 @@
+Debug/
+Release/
+.settings/
+.codex/
+*.pyc
+*.obj
+*.map
+*.out
