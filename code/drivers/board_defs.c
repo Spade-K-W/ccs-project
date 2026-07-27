@@ -4,7 +4,7 @@
 
 /*
  * 循迹多路选择：AD0->PB15, AD1->PB16, AD2->PA17, OUT->PA28
- * （与 SysConfig GPIO_GRP_LINE 一致；PA13/PA14 留给视觉 SPI0）
+ * （与 SysConfig GPIO_GRP_LINE 一致）
  */
 const GpioPin LINE_AD0 = {GPIO_GRP_LINE_AD0_PORT, GPIO_GRP_LINE_AD0_PIN};
 const GpioPin LINE_AD1 = {GPIO_GRP_LINE_AD1_PORT, GPIO_GRP_LINE_AD1_PIN};
