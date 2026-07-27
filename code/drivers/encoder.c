@@ -6,43 +6,20 @@
 #include <stdio.h>
 
 /*
- * M1: A=PB19  B=PA31（本地初始化）
- * M2: A=PA24  B=PA25
- * M3: A=PA9   B=PB24（本地初始化）
- * M4: A=PA3   B=PA4
- * 左=(M1+M2)/2  右=(M3+M4)/2
+ * 左右各一路编码器（省 4 脚）：
+ *   左 M1: A=PB19  B=PA31
+ *   右 M4: A=PA3   B=PA4
+ * 引脚由 SysConfig GPIO_GRP_ENCODER 配置
  */
-#define ENC_A_IRQ_GPIOA \
-    (GPIO_GRP_ENCODER_M2_ENCODER_A_PIN | \
-     GPIO_GRP_ENCODER_M3_ENCODER_A_PIN | \
-     GPIO_GRP_ENCODER_M4_ENCODER_A_PIN)
-
-#define ENC_A_IRQ_GPIOB \
-    (GPIO_GRP_ENCODER_M1_ENCODER_A_PIN)
-
-#ifndef GPIO_GRP_ENCODER_M1_ENCODER_B_PORT
-#define GPIO_GRP_ENCODER_M1_ENCODER_B_PORT   (GPIOA)
-#define GPIO_GRP_ENCODER_M1_ENCODER_B_PIN    (DL_GPIO_PIN_31)
-#define GPIO_GRP_ENCODER_M1_ENCODER_B_IOMUX  (IOMUX_PINCM6)
-#define ENC_M1_B_NEED_LOCAL_INIT            (1)
-#else
-#define ENC_M1_B_NEED_LOCAL_INIT            (0)
-#endif
-
-#ifndef GPIO_GRP_ENCODER_M3_ENCODER_B_PORT
-#define GPIO_GRP_ENCODER_M3_ENCODER_B_PORT   (GPIOB)
-#define GPIO_GRP_ENCODER_M3_ENCODER_B_PIN    (DL_GPIO_PIN_24)
-#define GPIO_GRP_ENCODER_M3_ENCODER_B_IOMUX  (IOMUX_PINCM52)
-#define ENC_M3_B_NEED_LOCAL_INIT            (1)
-#else
-#define ENC_M3_B_NEED_LOCAL_INIT            (0)
-#endif
+#define ENC_A_IRQ_GPIOA  (GPIO_GRP_ENCODER_M4_ENCODER_A_PIN)
+#define ENC_A_IRQ_GPIOB  (GPIO_GRP_ENCODER_M1_ENCODER_A_PIN)
 
 /* 避免依赖 math.h 的 M_PI */
 #define ENC_PI  (3.14159265358979323846f)
 
-static volatile int32_t s_cnt[4] = {0, 0, 0, 0};
-static int32_t s_cntPrev[4]      = {0, 0, 0, 0};
+/* [0]=左 M1，[1]=右 M4 */
+static volatile int32_t s_cnt[2] = {0, 0};
+static int32_t s_cntPrev[2]      = {0, 0};
 static float   s_leftSpeed       = 0.0f;  /* 脉冲增量/周期，供速度环 */
 static float   s_rightSpeed      = 0.0f;
 static float   s_leftSpeedCms    = 0.0f;  /* 物理速度 cm/s */
@@ -122,18 +99,8 @@ void encoder_on_gpio_isr(void)
 
     stA = DL_GPIO_getEnabledInterruptStatus(GPIOA, ENC_A_IRQ_GPIOA);
     if (stA != 0U) {
-        if ((stA & GPIO_GRP_ENCODER_M2_ENCODER_A_PIN) != 0U) {
-            enc_on_a_edge(&s_cnt[1],
-                GPIO_GRP_ENCODER_M2_ENCODER_A_PORT, GPIO_GRP_ENCODER_M2_ENCODER_A_PIN,
-                GPIO_GRP_ENCODER_M2_ENCODER_B_PORT, GPIO_GRP_ENCODER_M2_ENCODER_B_PIN);
-        }
-        if ((stA & GPIO_GRP_ENCODER_M3_ENCODER_A_PIN) != 0U) {
-            enc_on_a_edge(&s_cnt[2],
-                GPIO_GRP_ENCODER_M3_ENCODER_A_PORT, GPIO_GRP_ENCODER_M3_ENCODER_A_PIN,
-                GPIO_GRP_ENCODER_M3_ENCODER_B_PORT, GPIO_GRP_ENCODER_M3_ENCODER_B_PIN);
-        }
         if ((stA & GPIO_GRP_ENCODER_M4_ENCODER_A_PIN) != 0U) {
-            enc_on_a_edge(&s_cnt[3],
+            enc_on_a_edge(&s_cnt[1],
                 GPIO_GRP_ENCODER_M4_ENCODER_A_PORT, GPIO_GRP_ENCODER_M4_ENCODER_A_PIN,
                 GPIO_GRP_ENCODER_M4_ENCODER_B_PORT, GPIO_GRP_ENCODER_M4_ENCODER_B_PIN);
         }
@@ -153,27 +120,13 @@ void encoder_on_gpio_isr(void)
 
 void encoder_init(void)
 {
-#if ENC_M1_B_NEED_LOCAL_INIT
-    DL_GPIO_initDigitalInputFeatures(GPIO_GRP_ENCODER_M1_ENCODER_B_IOMUX,
-        DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
-        DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
-#endif
-#if ENC_M3_B_NEED_LOCAL_INIT
-    DL_GPIO_initDigitalInputFeatures(GPIO_GRP_ENCODER_M3_ENCODER_B_IOMUX,
-        DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_PULL_UP,
-        DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
-#endif
-
 #if ENC_CALIB_POLL_MODE
     /*
      * 标定模式：关掉编码器 GPIO 中断，改由 encoder_poll() 数边沿，
      * 避免中断异常时 OLED 一直为 0；手转足够慢，10ms 轮询够用。
      * MPU6050 仍用 GPIOA 中断（mpu6050_startup 已 EnableIRQ）。
      */
-    DL_GPIO_disableInterrupt(GPIOA,
-        GPIO_GRP_ENCODER_M2_ENCODER_A_PIN |
-        GPIO_GRP_ENCODER_M3_ENCODER_A_PIN |
-        GPIO_GRP_ENCODER_M4_ENCODER_A_PIN);
+    DL_GPIO_disableInterrupt(GPIOA, GPIO_GRP_ENCODER_M4_ENCODER_A_PIN);
     DL_GPIO_disableInterrupt(GPIOB, GPIO_GRP_ENCODER_M1_ENCODER_A_PIN);
 #else
     NVIC_EnableIRQ(GPIO_MULTIPLE_GPIOA_INT_IRQN);
@@ -184,27 +137,23 @@ void encoder_init(void)
 }
 
 /*
- * 主循环轮询四路 A 相边沿（仅 ENC_CALIB_POLL_MODE=1 时需要）
+ * 主循环轮询左右 A 相边沿（仅 ENC_CALIB_POLL_MODE=1 时需要）
  */
 void encoder_poll(void)
 {
 #if ENC_CALIB_POLL_MODE
-    static bool s_prevA[4];
+    static bool s_prevA[2];
     static bool s_ready = false;
-    bool nowA[4];
+    bool nowA[2];
     uint8_t i;
 
     nowA[0] = enc_pin_high(GPIO_GRP_ENCODER_M1_ENCODER_A_PORT,
                            GPIO_GRP_ENCODER_M1_ENCODER_A_PIN);
-    nowA[1] = enc_pin_high(GPIO_GRP_ENCODER_M2_ENCODER_A_PORT,
-                           GPIO_GRP_ENCODER_M2_ENCODER_A_PIN);
-    nowA[2] = enc_pin_high(GPIO_GRP_ENCODER_M3_ENCODER_A_PORT,
-                           GPIO_GRP_ENCODER_M3_ENCODER_A_PIN);
-    nowA[3] = enc_pin_high(GPIO_GRP_ENCODER_M4_ENCODER_A_PORT,
+    nowA[1] = enc_pin_high(GPIO_GRP_ENCODER_M4_ENCODER_A_PORT,
                            GPIO_GRP_ENCODER_M4_ENCODER_A_PIN);
 
     if (!s_ready) {
-        for (i = 0U; i < 4U; i++) {
+        for (i = 0U; i < 2U; i++) {
             s_prevA[i] = nowA[i];
         }
         s_ready = true;
@@ -218,21 +167,11 @@ void encoder_poll(void)
     }
     if (nowA[1] != s_prevA[1]) {
         enc_on_a_edge(&s_cnt[1],
-            GPIO_GRP_ENCODER_M2_ENCODER_A_PORT, GPIO_GRP_ENCODER_M2_ENCODER_A_PIN,
-            GPIO_GRP_ENCODER_M2_ENCODER_B_PORT, GPIO_GRP_ENCODER_M2_ENCODER_B_PIN);
-    }
-    if (nowA[2] != s_prevA[2]) {
-        enc_on_a_edge(&s_cnt[2],
-            GPIO_GRP_ENCODER_M3_ENCODER_A_PORT, GPIO_GRP_ENCODER_M3_ENCODER_A_PIN,
-            GPIO_GRP_ENCODER_M3_ENCODER_B_PORT, GPIO_GRP_ENCODER_M3_ENCODER_B_PIN);
-    }
-    if (nowA[3] != s_prevA[3]) {
-        enc_on_a_edge(&s_cnt[3],
             GPIO_GRP_ENCODER_M4_ENCODER_A_PORT, GPIO_GRP_ENCODER_M4_ENCODER_A_PIN,
             GPIO_GRP_ENCODER_M4_ENCODER_B_PORT, GPIO_GRP_ENCODER_M4_ENCODER_B_PIN);
     }
 
-    for (i = 0U; i < 4U; i++) {
+    for (i = 0U; i < 2U; i++) {
         s_prevA[i] = nowA[i];
     }
 #else
@@ -245,7 +184,7 @@ void encoder_reset(void)
     uint8_t i;
 
     __disable_irq();
-    for (i = 0U; i < 4U; i++) {
+    for (i = 0U; i < 2U; i++) {
         s_cnt[i] = 0;
         s_cntPrev[i] = 0;
     }
@@ -261,11 +200,11 @@ void encoder_reset(void)
 void encoder_speed_restart(void)
 {
     uint8_t i;
-    int32_t now[4];
+    int32_t now[2];
 
     /* 以当前脉冲为新基准，丢弃延时期间未采样的增量 */
     __disable_irq();
-    for (i = 0U; i < 4U; i++) {
+    for (i = 0U; i < 2U; i++) {
         now[i] = s_cnt[i];
         s_cntPrev[i] = now[i];
     }
@@ -280,7 +219,7 @@ void encoder_speed_restart(void)
 
 void encoder_update(void)
 {
-    int32_t now[4];
+    int32_t now[2];
     int32_t dL;
     int32_t dR;
     uint8_t i;
@@ -289,14 +228,14 @@ void encoder_update(void)
     float rawRCms;
 
     __disable_irq();
-    for (i = 0U; i < 4U; i++) {
+    for (i = 0U; i < 2U; i++) {
         now[i] = s_cnt[i];
     }
     __enable_irq();
 
-    dL = ((now[0] - s_cntPrev[0]) + (now[1] - s_cntPrev[1])) / 2;
-    dR = ((now[2] - s_cntPrev[2]) + (now[3] - s_cntPrev[3])) / 2;
-    for (i = 0U; i < 4U; i++) {
+    dL = now[0] - s_cntPrev[0];
+    dR = now[1] - s_cntPrev[1];
+    for (i = 0U; i < 2U; i++) {
         s_cntPrev[i] = now[i];
     }
 
@@ -336,22 +275,19 @@ void encoder_get_counts(EncoderCounts *out)
         return;
     }
     __disable_irq();
-    out->leftCount  = (s_cnt[0] + s_cnt[1]) / 2;
-    out->rightCount = (s_cnt[2] + s_cnt[3]) / 2;
+    out->leftCount  = s_cnt[0];
+    out->rightCount = s_cnt[1];
     __enable_irq();
 }
 
-void encoder_get_motor_counts(int32_t out[4])
+void encoder_get_motor_counts(int32_t out[2])
 {
-    uint8_t i;
-
     if (out == NULL) {
         return;
     }
     __disable_irq();
-    for (i = 0U; i < 4U; i++) {
-        out[i] = s_cnt[i];
-    }
+    out[0] = s_cnt[0];  /* M1 左 */
+    out[1] = s_cnt[1];  /* M4 右 */
     __enable_irq();
 }
 
@@ -388,8 +324,8 @@ int32_t encoder_get_vehicle_pos_pulses(void)
     int32_t right;
 
     __disable_irq();
-    left  = (s_cnt[0] + s_cnt[1]) / 2;
-    right = (s_cnt[2] + s_cnt[3]) / 2;
+    left  = s_cnt[0];
+    right = s_cnt[1];
     __enable_irq();
 
     if (ENC_LEFT_REVERSE) {
@@ -409,7 +345,7 @@ void encoder_display_oled_uart(bool isStraight,
     char lineCmd[24];
     char lineOut[24];
     char linePulse[24];
-    int32_t motorCnt[4];
+    int32_t motorCnt[2];
 
     snprintf(lineMode, sizeof(lineMode), "%-16s",
              isStraight ? "straight" : "turn");
@@ -418,13 +354,12 @@ void encoder_display_oled_uart(bool isStraight,
     snprintf(lineOut, sizeof(lineOut),
              "Out L:%3d R:%3d", (int)outLeft, (int)outRight);
 
-    /* 第 4 行：四路 A 相边沿累计脉冲（手转 1 圈读数 → ENC_PULSES_PER_REV） */
+    /* 第 4 行：左右 A 相累计脉冲（手转 1 圈读数 → ENC_PULSES_PER_REV） */
     encoder_poll();
     encoder_get_motor_counts(motorCnt);
     snprintf(linePulse, sizeof(linePulse),
-             "%4ld/%4ld/%4ld/%4ld",
-             (long)motorCnt[0], (long)motorCnt[1],
-             (long)motorCnt[2], (long)motorCnt[3]);
+             "L:%5ld R:%5ld",
+             (long)motorCnt[0], (long)motorCnt[1]);
 
     oled_display_string(0, 0, lineMode);
     oled_display_string(1, 0, lineCmd);

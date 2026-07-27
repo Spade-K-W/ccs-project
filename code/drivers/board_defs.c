@@ -74,6 +74,7 @@ void vision_spi_hw_init(void)
 }
 
 const GpioPin BUZZER = {GPIO_GRP_BUZZER_PORT, GPIO_GRP_BUZZER_BUZZER_PIN};
+const GpioPin ELECTROMAGNET = {Electromagnet_PORT, Electromagnet_PIN_0_PIN};
 const GpioPin MOTOR_STBY = {GPIO_GRP_MOTOR_L_MOTOR_STBY_PORT, GPIO_GRP_MOTOR_L_MOTOR_STBY_PIN};
 const GpioPin USER_KEY = {GPIO_BUTTON_PORT, GPIO_BUTTON_USER_KEY_PIN};
 
@@ -137,6 +138,8 @@ void board_safe_state(void)
 #else
     pin_high(&BUZZER);
 #endif
+
+    pin_low(&ELECTROMAGNET);  /* 安全态：电磁铁释放 */
 
     pin_low(&MOTOR_STBY);
 

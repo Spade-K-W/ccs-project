@@ -3,6 +3,14 @@
 
 #define I2C_WAIT_MAX    (200000U)
 
+/* 中断里不做总线恢复，避免 ISR 里长时间复位 I2C */
+static void mpu_i2c_recover(void)
+{
+    if (__get_IPSR() == 0U) {
+        mpu6050_i2c_sda_unlock();
+    }
+}
+
 static bool i2c_wait_idle(void)
 {
     uint32_t timeout = I2C_WAIT_MAX;
@@ -99,7 +107,7 @@ bool mpu_i2c_write_byte(uint8_t devAddr, uint8_t reg, uint8_t val)
     DL_I2C_transmitControllerData(I2C_MPU6050_INST, reg);
 
     if (!i2c_wait_idle()) {
-        mpu6050_i2c_sda_unlock();
+        mpu_i2c_recover();
         return false;
     }
 
@@ -113,18 +121,18 @@ bool mpu_i2c_write_byte(uint8_t devAddr, uint8_t reg, uint8_t val)
         }
 
         if (DL_I2C_getControllerStatus(I2C_MPU6050_INST) & DL_I2C_CONTROLLER_STATUS_ERROR) {
-            mpu6050_i2c_sda_unlock();
+            mpu_i2c_recover();
             return false;
         }
 
         if (--timeout == 0U) {
-            mpu6050_i2c_sda_unlock();
+            mpu_i2c_recover();
             return false;
         }
     }
 
     if (!i2c_wait_tx_done()) {
-        mpu6050_i2c_sda_unlock();
+        mpu_i2c_recover();
         return false;
     }
 
@@ -150,7 +158,7 @@ bool mpu_i2c_read_bytes(uint8_t devAddr, uint8_t reg, uint8_t *buf, uint32_t len
 
     if (!i2c_wait_idle()) {
         I2C_MPU6050_INST->MASTER.MCTR = 0;
-        mpu6050_i2c_sda_unlock();
+        mpu_i2c_recover();
         return false;
     }
 
@@ -166,13 +174,13 @@ bool mpu_i2c_read_bytes(uint8_t devAddr, uint8_t reg, uint8_t *buf, uint32_t len
 
         if (DL_I2C_getControllerStatus(I2C_MPU6050_INST) & DL_I2C_CONTROLLER_STATUS_ERROR) {
             I2C_MPU6050_INST->MASTER.MCTR = 0;
-            mpu6050_i2c_sda_unlock();
+            mpu_i2c_recover();
             return false;
         }
 
         if (--timeout == 0U) {
             I2C_MPU6050_INST->MASTER.MCTR = 0;
-            mpu6050_i2c_sda_unlock();
+            mpu_i2c_recover();
             return false;
         }
     }

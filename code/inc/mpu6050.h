@@ -22,6 +22,14 @@ float mpu6050_get_gyro_z_dps(void);
 /* 获取当前累计角度，单位：deg */
 float mpu6050_get_z_angle_deg(void);
 
+/* 轮询更新俯仰角/翻滚角/旋转角 */
+bool mpu6050_update_angles(void);
+
+/* 翻滚角 / 俯仰角 / 旋转角，单位：deg */
+float mpu6050_get_roll(void);
+float mpu6050_get_pitch(void);
+float mpu6050_get_yaw(void);
+
 /* 角度清零 */
 void mpu6050_reset_z_angle(void);
 

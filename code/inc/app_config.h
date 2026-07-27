@@ -18,11 +18,12 @@
 
 /* =========================================================
  * 电机方向修正
+ * M1/M4 与 M2/M3 机械转向相反，软件统一取反
  * ========================================================= */
-#define M1_REVERSED                 (false)
+#define M1_REVERSED                 (true)
 #define M2_REVERSED                 (true)
 #define M3_REVERSED                 (true)
-#define M4_REVERSED                 (false)
+#define M4_REVERSED                 (true)
 
 /* =========================================================
  * 陀螺仪方向修正
@@ -86,10 +87,10 @@
  *
  *   距离(mm) = 脉冲数 × 每脉冲距离
  *   速度(cm/s) = 距离变化 / 时间（由测速函数调用）
- *
+ *   轮直径和360°脉冲数需要实测
  * ENC_PULSES_PER_REV：手转 1 圈，OLED 第 4 行该轮读数（取绝对值）后填入
  * ========================================================= */
-#define WHEEL_DIAMETER_MM           (47.0f)    /* 车轮直径 mm */
+#define WHEEL_DIAMETER_MM           (65.0f)    /* 车轮直径 mm */
 #define ENC_PULSES_PER_REV          (530.0f)   /* 实测：转 360° ≈ 530 脉冲 */
 #define ENC_SPEED_FIT_K             (1.0f)
 #define ENC_SPEED_FIT_B             (0.0f)
@@ -97,10 +98,10 @@
 /* =========================================================
  * 速度参数
  * ========================================================= */
-#define BASE_SPEED_STRAIGHT         (16)
-#define BASE_SPEED_ARC              (45)
-#define SEARCH_SPEED_LOW            (3)
-#define SEARCH_SPEED_HIGH           (7)
+#define BASE_SPEED_STRAIGHT         (40)//直线循迹速度
+#define BASE_SPEED_ARC              (30)//弧线循迹速度
+#define SEARCH_SPEED_LOW            (5)
+#define SEARCH_SPEED_HIGH           (10)
 
 /*
  * 非对称转弯（不再左右 |PWM| 相等）：
@@ -155,8 +156,7 @@
 
 /* =========================================================
  * 编码器 + 速度内环（PWM 单位）
- * M1:A=PB19/B=PA31  M2:A=PA24/B=PA25
- * M3:A=PA9/B=PB24   M4:A=PA3/B=PA4
+ * 左 M1:A=PB19/B=PA31  右 M4:A=PA3/B=PA4
  * ========================================================= */
 /*
  * 前进为正。空转时若 Mea 左负右正，把 ENC_LEFT_REVERSE 置 true。
@@ -190,10 +190,12 @@
 #define LINE_ALL_ON_STOP            (1)
 
 /*
+
  * 直线速度环（共模）：左右加同一 corr，保留外环差速
  * Cmd=16/16 → Out 必相等
+ *直线速度环参数，需要实测微调
  */
-#define KP_ACCEL_STRAIGHT           (0.30f)
+#define KP_ACCEL_STRAIGHT           (3.0f)
 #define KI_ACCEL_STRAIGHT           (0.03f)
 #define KD_ACCEL_STRAIGHT           (0.00f)
 #define ACCEL_INTEGRAL_MAX_STRAIGHT (4.0f)
@@ -204,7 +206,7 @@
  * 非对称转弯后整体已降速，FF/增益放小，避免 Out 再把弯拧飞
  */
 #define ACCEL_TURN_FF_BOOST         (5)
-#define KP_ACCEL_TURN               (0.40f)
+#define KP_ACCEL_TURN               (0.4)
 #define KI_ACCEL_TURN               (0.10f)
 #define KD_ACCEL_TURN               (0.00f)
 #define ACCEL_INTEGRAL_MAX_TURN     (10.0f)
@@ -221,7 +223,7 @@
  * ========================================================= */
 
 /* 弧线循迹比例系数 */
-#define KP_LINE_ARC                 (12)
+#define KP_LINE_ARC                 (20.0f)
 
 /* 入弧辅助偏置有效时间(ms) */
 #define ARC_ENTER_ASSIST_MS         (200U)

@@ -35,8 +35,8 @@ void encoder_reset(void);
 void encoder_speed_restart(void);
 
 void encoder_get_counts(EncoderCounts *out);
-/* 四路电机原始 A 相边沿累计脉冲：out[0..3] = M1..M4 */
-void encoder_get_motor_counts(int32_t out[4]);
+/* 左右编码器原始 A 相边沿累计脉冲：out[0]=M1 左，out[1]=M4 右 */
+void encoder_get_motor_counts(int32_t out[2]);
 void encoder_get_speeds(EncoderSpeeds *out);
 
 /*
@@ -59,7 +59,7 @@ float encoder_get_vehicle_speed_cm_s(void);
 int32_t encoder_get_vehicle_pos_pulses(void);
 
 /*
- * OLED：页0 状态，页1 Cmd，页2 Out，页3 四路 A 相脉冲计数（标定用）
+ * OLED：页0 状态，页1 Cmd，页2 Out，页3 左右 A 相脉冲计数（标定用）
  * 串口：仅 turn 时按 UART_DEBUG_PRINT_INTERVAL_MS 输出
  */
 void encoder_display_oled_uart(bool isStraight,

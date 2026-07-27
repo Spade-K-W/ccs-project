@@ -1,66 +1,55 @@
 #include "ti_msp_dl_config.h"
 #include "board_defs.h"
 #include "motor.h"
-#include "encoder.h"
 #include "oled.h"
-#include "line_sensor.h"
-#include "uart_debug.h"
-#include "uart_vision.h"
 #include "mpu6050.h"
 #include "BUZZER.h"
+#include "ELE.h"
+#include "app_config.h"
+#include "app_task.h"
+#include "line_sensor.h"
+#include "encoder.h"
 #include "Delay.h"
-#include "choosing.h"
-#include "chapter.h"
+
+#include <stdint.h>
+#include <stdbool.h>
 
 int main(void)
 {
-    uint8_t project;
+    uint8_t pattern;
+    float   error;
+    bool    lineValid;
 
     SYSCFG_DL_init();
-    /* 高电平发声：上电立刻拉低 PB13 静音 */
-    BUZZER_Mute();
-    uart_debug_init();
-    uart_vision_init();
-    uart_vision_send_boot_test();  /* 上电立刻测 SPI0：PB18/PA14/PA13 */
     line_sensor_gpio_init();
     board_safe_state();
-    BUZZER_Mute();
 
     oled_init();
     oled_clear();
-    mpu6050_startup();
 
+    /* 电机初始化并停车，校准期间保持静止 */
     motor_init();
+    chassis_stop();
     encoder_init();
 
-    /* 初始化完成提示一声，再进入关卡选择 */
+    /* 1. 上电先校准 MPU */
+    mpu6050_startup();
+
+    /* 2. 校准完毕：电磁铁吸合 + 蜂鸣器响一声 */
+    ELE_On();
+    oled_display_string(0, 0, "MPU Ready       ");
+    oled_display_string(1, 0, "                ");
     BUZZER_BeepShort();
 
-    project = choosing_select_project();
+    /* 3. 进入弧线循迹（+1 正向；若贴线方向反了改为 -1.0f） */
+    app_task_arc_prepare(-1.0f);
+    oled_display_string(0, 0, "Arc Follow      ");
 
-    switch (project) {
-        case 1:
-            chapter1_run();
-            break;
-        case 2:
-            chapter2_run();
-            break;
-        case 3:
-            chapter3_run();
-            break;
-        case 4:
-            chapter4_run();
-            break;
-        case 5:
-            chapter5_run();
-            break;
-        default:
-            chapter1_run();
-            break;
-    }
-
-    /* 各关卡函数内部为死循环，正常不会返回 */
     while (1) {
-        Delay_ms(500U);
+        pattern   = line_read_pattern();
+        lineValid = line_calc_error_f(pattern, &error);
+        line_follow_arc(pattern, error, lineValid);
+
+        Delay_ms(LOOP_PERIOD_MS);
     }
 }

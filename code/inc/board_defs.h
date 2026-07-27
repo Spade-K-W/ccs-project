@@ -27,6 +27,7 @@ extern const GpioPin LINE_AD2;
 extern const GpioPin LINE_OUT;
 
 extern const GpioPin BUZZER;
+extern const GpioPin ELECTROMAGNET;  /* PA24，高电平吸合 */
 extern const GpioPin MOTOR_STBY;
 extern const GpioPin USER_KEY;
 

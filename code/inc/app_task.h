@@ -68,6 +68,15 @@ void line_follow_left_turn(uint8_t pattern, float error, bool lineValid);
 void line_follow_right_turn(uint8_t pattern, float error, bool lineValid);
 
 /*
+ * 弧线循迹准备：mirrorDir > 0 正向，< 0 反向（与 do_arc_follow_step 一致）
+ * 会复位入弧计时与 PID/编码器基准
+ */
+void app_task_arc_prepare(float mirrorDir);
+
+/* 弧线循迹单步：外环差速 + 内环速度环（同直线 chassis_set_with_accel） */
+void line_follow_arc(uint8_t pattern, float error, bool lineValid);
+
+/*
  * 循迹状态机单步（主循环每拍调用）：
  *  状态一 直线循迹；CH123 → 预延时 TURN_DETECT_DELAY_MS 后左转；
  *  CH678 → 预延时后右转；转满后回状态一。

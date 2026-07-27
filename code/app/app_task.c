@@ -332,6 +332,64 @@ void line_follow_drive(uint8_t pattern, float error, bool lineValid)
     line_follow_refresh_ui(pattern, error, lineValid, "go straight     ");
 }
 
+/* 弧线循迹：入弧辅助计时与方向 */
+static uint32_t g_arcPhaseMs   = 0U;
+static float    g_arcMirrorDir = 1.0f;
+static int16_t  g_arcEnterBias = 0;
+
+void app_task_arc_prepare(float mirrorDir)
+{
+    g_arcPhaseMs   = 0U;
+    g_arcMirrorDir = (mirrorDir >= 0.0f) ? 1.0f : -1.0f;
+    g_arcEnterBias = (g_arcMirrorDir > 0.0f)
+                   ? (int16_t)ARC_ENTER_TURN_BIAS
+                   : -(int16_t)ARC_ENTER_TURN_BIAS;
+    g_lastError    = 0;
+    pid_line_reset();
+    pid_accel_reset();
+    encoder_reset();
+}
+
+/*
+ * line_follow_arc — 弧线循迹驱动入口
+ * 外环：差速 = KP_LINE_ARC × error × mirrorDir，入弧前叠加偏置；
+ * 内环：与直线相同，chassis_set_with_accel（测速 vs Cmd，共模修正 PWM）。
+ */
+void line_follow_arc(uint8_t pattern, float error, bool lineValid)
+{
+    int16_t diff;
+    int16_t left;
+    int16_t right;
+
+    g_arcPhaseMs += (uint32_t)LOOP_PERIOD_MS;
+
+    if (!lineValid) {
+        if (g_lastError <= 0) {
+            left  = (int16_t)SEARCH_SPEED_LOW;
+            right = (int16_t)SEARCH_SPEED_HIGH;
+        } else {
+            left  = (int16_t)SEARCH_SPEED_HIGH;
+            right = (int16_t)SEARCH_SPEED_LOW;
+        }
+        chassis_set_with_accel(left, right);
+        line_follow_refresh_ui(pattern, error, lineValid, "arc search      ");
+        return;
+    }
+
+    g_lastError = (int16_t)error;
+    diff = (int16_t)((float)KP_LINE_ARC * error * g_arcMirrorDir);
+
+    if (g_arcPhaseMs <= (uint32_t)ARC_ENTER_ASSIST_MS) {
+        diff += g_arcEnterBias;
+    }
+
+    left  = (int16_t)BASE_SPEED_ARC + diff;
+    right = (int16_t)BASE_SPEED_ARC - diff;
+
+    chassis_set_with_accel(left, right);
+    line_follow_refresh_ui(pattern, error, true, "arc follow      ");
+}
+
 /* ============================================================
  * line_follow_get_wheels — 读取最近一次轮速命令
  *
