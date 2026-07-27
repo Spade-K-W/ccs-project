@@ -98,10 +98,10 @@
 /* =========================================================
  * 速度参数
  * ========================================================= */
-#define BASE_SPEED_STRAIGHT         (40)//直线循迹速度
-#define BASE_SPEED_ARC              (30)//弧线循迹速度
-#define SEARCH_SPEED_LOW            (5)
-#define SEARCH_SPEED_HIGH           (10)
+#define BASE_SPEED_STRAIGHT         (25)//直线循迹速度
+#define BASE_SPEED_ARC              (20)//弧线循迹速度
+#define SEARCH_SPEED_LOW            (3)
+#define SEARCH_SPEED_HIGH           (7)
 
 /*
  * 非对称转弯（不再左右 |PWM| 相等）：
@@ -195,7 +195,7 @@
  * Cmd=16/16 → Out 必相等
  *直线速度环参数，需要实测微调
  */
-#define KP_ACCEL_STRAIGHT           (3.0f)
+#define KP_ACCEL_STRAIGHT           (0.30f)
 #define KI_ACCEL_STRAIGHT           (0.03f)
 #define KD_ACCEL_STRAIGHT           (0.00f)
 #define ACCEL_INTEGRAL_MAX_STRAIGHT (4.0f)
@@ -206,7 +206,7 @@
  * 非对称转弯后整体已降速，FF/增益放小，避免 Out 再把弯拧飞
  */
 #define ACCEL_TURN_FF_BOOST         (5)
-#define KP_ACCEL_TURN               (0.4)
+#define KP_ACCEL_TURN               (0.40f)
 #define KI_ACCEL_TURN               (0.10f)
 #define KD_ACCEL_TURN               (0.00f)
 #define ACCEL_INTEGRAL_MAX_TURN     (10.0f)
@@ -223,7 +223,7 @@
  * ========================================================= */
 
 /* 弧线循迹比例系数 */
-#define KP_LINE_ARC                 (20.0f)
+#define KP_LINE_ARC                 (6)
 
 /* 入弧辅助偏置有效时间(ms) */
 #define ARC_ENTER_ASSIST_MS         (200U)

@@ -20,7 +20,7 @@ typedef struct {
     volatile int8_t dir;
 } Motor;
 
-/* 八路巡线 4051 引脚（与 SysConfig GPIO_GRP_LINE 一致：AD2=PA17, OUT=PA28） */
+/* 八路巡线 4051 引脚（与 SysConfig GPIO_GRP_LINE 一致：AD0=PB15 AD1=PB16 AD2=PA17 OUT=PA28） */
 extern const GpioPin LINE_AD0;
 extern const GpioPin LINE_AD1;
 extern const GpioPin LINE_AD2;
