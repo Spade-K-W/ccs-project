@@ -234,7 +234,7 @@
  * ========================================================= */
 
 /* --- 1) 速度 --- */
-#define BASE_SPEED_ARC              (10)  /* 共模略降，把余量留给差速 */
+#define BASE_SPEED_ARC              (20)  /* 共模略降，把余量留给差速 */
 /*
  * 线在正中时的弯道前馈差速（转不过就加大）：
  *   左弧 prepare(+1)：L=BASE-BIAS, R=BASE+BIAS
@@ -247,34 +247,39 @@
  */
 #define ARC_STEER_KEEP_MIN          (8)
 /*
- * 弧线丢线搜线：左弧 L=慢 R=快（同向前进拧弯）；
- * 直到 CH2+CH3 亮，或累计偏航 ≥ ARC_TARGET_DEG。
+ * 弧线线灭分两种（用累计偏航区分）：
+ *   |A| ≥ ARC_END_COAST_DEG → 弧线自然结束：沿用上一拍 Cmd（Arc coast）
+ *   |A| <  该值           → 异常走出线：原地差速找回（Arc recover）
+ * 出弯还必须：已 coast 满 ARC_COAST_MIN_MS，且 |A|≥ARC_TARGET_DEG
+ * （防止积分提前到 180° 时线一灭就立刻切 Straight）
  */
-#define ARC_LOST_SPEED_L            (0)
-#define ARC_LOST_SPEED_R            (30)
+#define ARC_END_COAST_DEG           (140.0f)
+#define ARC_COAST_MIN_MS            (500U)
+#define ARC_LOST_SPEED_L            (-20) /* 异常丢线：左弧 L 倒 R 进 */
+#define ARC_LOST_SPEED_R            (20)
 /* 丢线搜线用全局 SEARCH_SPEED_LOW / SEARCH_SPEED_HIGH */
 
 /* --- 2) 红外外环 --- */
 /* CH4/CH5=0：压在中心时 error≈0 */
-#define LINE_WEIGHT_ARC_CH1         (-6)
-#define LINE_WEIGHT_ARC_CH2         (-5)
-#define LINE_WEIGHT_ARC_CH3         (-4)
-#define LINE_WEIGHT_ARC_CH4         (-3)
-#define LINE_WEIGHT_ARC_CH5         (-2)
-#define LINE_WEIGHT_ARC_CH6         (-1)
-#define LINE_WEIGHT_ARC_CH7         (0)
-#define LINE_WEIGHT_ARC_CH8         (1)
+#define LINE_WEIGHT_ARC_CH1         (-4)
+#define LINE_WEIGHT_ARC_CH2         (-3)
+#define LINE_WEIGHT_ARC_CH3         (-2)
+#define LINE_WEIGHT_ARC_CH4         (-1)
+#define LINE_WEIGHT_ARC_CH5         (0)
+#define LINE_WEIGHT_ARC_CH6         (1)
+#define LINE_WEIGHT_ARC_CH7         (2)
+#define LINE_WEIGHT_ARC_CH8         (3)
 
-#define KP_LINE_ARC                 (24.0f) /* 偏线时再加大拧弯 */
+#define KP_LINE_ARC                 (18.0f) /* 偏线时再加大拧弯 */
 #define KD_LINE_ARC                 (0.5f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
 #define KD_GYRO_ARC                 (0.00f)
 #define KD_GYRO_ARC_SIGN            (1)
-#define ARC_DIFF_MAX                (45)  /* |steer| 总限幅；须 ≥ CURVE_BIAS+ENTER */
+#define ARC_DIFF_MAX                (100)  /* |steer| 总限幅；须 ≥ CURVE_BIAS+ENTER */
 
 #define ARC_ENTER_ASSIST_MS         (400U)
-#define ARC_ENTER_TURN_BIAS         (14)  /* 入弧再加拧，帮助咬住弯 */
+#define ARC_ENTER_TURN_BIAS         (10)  /* 入弧再加拧，帮助咬住弯 */
 
 /* --- 3) Straight ↔ Arc --- */
 #define LINE_DETECT_HOLD_CNT        (3U)
@@ -314,11 +319,25 @@
 
 #define MPU6050_DATA_RATE_HZ        (125.0f)
 #define MPU_INT_SAMPLE_HZ           (125.0f)
+/*
+ * 采样率核对（与 mpu6050_init 寄存器一致）：
+ *   CONFIG=0x03 → DLPF 开，陀螺输出 1kHz
+ *   SMPLRT_DIV=0x07 → SampleRate = 1000/(1+7) = 125Hz
+ *   → INT_DT = 1/125 s，勿改成主循环周期
+ */
 
 /* =========================================================
- * MPU6050 量程与校准参数
+ * MPU6050 量程与校准 / 积分净化
  * ========================================================= */
 #define MPU_GYRO_SENS_500DPS        (65.5f)
-#define MPU_CALIB_SAMPLES           (300U)
+#define MPU_CALIB_SAMPLES           (400U)   /* 静止标定点数（约 400×8ms≈3.2s） */
+#define MPU_CALIB_TRIM_EACH         (20U)    /* 去掉两端极值各 N 点 */
+
+/* 积分前低通：filt = α·new + (1-α)·old；α 越大越跟手、越小越稳 */
+#define GYRO_Z_LPF_ALPHA            (0.30f)
+/* 死区（dps）：过小易噪声积分，过大转弯欠积分；建议 0.8~1.5 */
+#define GYRO_Z_DEADZONE_DPS         (1.2f)
+/* 单周期 |Δψ| 上限（deg）：125Hz 下 4°/拍 ≈ 500°/s，压掉抖动尖峰 */
+#define GYRO_Z_DYAW_MAX_DEG         (4.0f)
 
 #endif /* APP_CONFIG_H */

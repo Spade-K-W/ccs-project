@@ -34,8 +34,8 @@ int main(void)
     /* 1. 上电先校准 MPU（车保持静止） */
     mpu6050_startup();
 
-    /* 2. 校准完毕提示 */
-    ELE_On();
+    /* 2. 校准完毕提示（电磁铁保持释放，不拉高） */
+    ELE_Off();
     oled_display_string(0, 0, "MPU Ready       ");
     oled_display_string(1, 0, "                ");
     BUZZER_BeepShort();

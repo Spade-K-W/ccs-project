@@ -10,12 +10,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* 与寄存器配置一致：1kHz/(1+SMPLRT_DIV=7) = 125Hz */
 #define MPU6050_INT_DT_SEC        (1.0f / MPU6050_DATA_RATE_HZ)
 #define MPU6050_ACCEL_XOUT_H_REG  (0x3BU)
 #define MPU_RAD_TO_DEG            (57.2957795f)
 
 static volatile float g_gyro_z_bias = 0.0f;
 static volatile float g_gyro_z_dps  = 0.0f;
+static volatile float g_gyro_z_filt = 0.0f;
+static volatile bool  g_gyro_filt_ready = false;
 static volatile float g_z_angle_deg = 0.0f;
 static volatile float g_roll_deg   = 0.0f;
 static volatile float g_pitch_deg  = 0.0f;
@@ -59,59 +62,137 @@ bool mpu6050_init(void)
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_PWR_MGMT_1_REG, 0x00U)) return false;
     delay_ms(50);
 
+    /* SMPLRT_DIV=7 + DLPF(CONFIG=3) → 125Hz DATA_READY，与 MPU6050_DATA_RATE_HZ 一致 */
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_SMPLRT_DIV_REG, 0x07U)) return false;
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_CONFIG_REG, 0x03U)) return false;
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_GYRO_CONFIG_REG, 0x08U)) return false;
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_ACCEL_CONFIG_REG, 0x00U)) return false;
 
-    /* 调试阶段建议锁存中断，便于观察 */
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_INT_PIN_CFG_REG, 0x00U)) return false;
     if (!mpu_i2c_write_byte(MPU6050_ADDR, MPU6050_INT_ENABLE_REG, 0x01U)) return false;
 
     (void)mpu_i2c_read_byte(MPU6050_ADDR, MPU6050_INT_STATUS_REG, &dummy);
 
-    g_gyro_z_bias = 0.0f;
-    g_gyro_z_dps  = 0.0f;
-    g_z_angle_deg = 0.0f;
-    g_roll_deg    = 0.0f;
-    g_pitch_deg   = 0.0f;
+    g_gyro_z_bias     = 0.0f;
+    g_gyro_z_dps      = 0.0f;
+    g_gyro_z_filt     = 0.0f;
+    g_gyro_filt_ready = false;
+    g_z_angle_deg     = 0.0f;
+    g_roll_deg        = 0.0f;
+    g_pitch_deg       = 0.0f;
 
     return true;
 }
 
-bool mpu6050_calibrate_bias(void)
+/*
+ * 去零偏后的 gyro(dps) → 低通 → 死区 → 限幅积分到 g_z_angle_deg
+ * 返回供外部显示的滤波后角速度
+ */
+static float gyro_z_lpf_integrate(float gyro_dps)
+{
+    float filt;
+    float dYaw;
+    float maxD;
+
+    if (!g_gyro_filt_ready) {
+        g_gyro_z_filt     = gyro_dps;
+        g_gyro_filt_ready = true;
+    } else {
+        g_gyro_z_filt = (GYRO_Z_LPF_ALPHA * gyro_dps)
+                      + ((1.0f - GYRO_Z_LPF_ALPHA) * g_gyro_z_filt);
+    }
+    filt = g_gyro_z_filt;
+
+    if ((filt > -(float)GYRO_Z_DEADZONE_DPS)
+        && (filt < (float)GYRO_Z_DEADZONE_DPS)) {
+        filt = 0.0f;
+    }
+
+    g_gyro_z_dps = filt;
+
+    if (filt != 0.0f) {
+        dYaw = filt * MPU6050_INT_DT_SEC;
+        maxD = (float)GYRO_Z_DYAW_MAX_DEG;
+        if (dYaw > maxD) {
+            dYaw = maxD;
+        } else if (dYaw < -maxD) {
+            dYaw = -maxD;
+        }
+
+        g_z_angle_deg += dYaw;
+        if (g_z_angle_deg > 180.0f) {
+            g_z_angle_deg -= 360.0f;
+        } else if (g_z_angle_deg < -180.0f) {
+            g_z_angle_deg += 360.0f;
+        }
+    }
+
+    return filt;
+}
+
+static void gyro_calib_sort_asc(float *a, uint32_t n)
 {
     uint32_t i;
-    int16_t raw = 0;
+    uint32_t j;
+    float t;
 
-    float sum = 0.0f;
-    float max_v = -10000.0f;
-    float min_v = 10000.0f;
+    for (i = 0U; i + 1U < n; i++) {
+        for (j = i + 1U; j < n; j++) {
+            if (a[j] < a[i]) {
+                t    = a[i];
+                a[i] = a[j];
+                a[j] = t;
+            }
+        }
+    }
+}
 
-    g_mpu_run_enable = false;
+bool mpu6050_calibrate_bias(void)
+{
+    static float s_calibBuf[MPU_CALIB_SAMPLES];
+    uint32_t i;
+    uint32_t n;
+    uint32_t trim;
+    uint32_t lo;
+    uint32_t hi;
+    int16_t  raw = 0;
+    float    sum;
 
-    for (i = 0; i < 1200; i++)
-    {
+    g_mpu_run_enable  = false;
+    g_gyro_filt_ready = false;
+
+    n = (uint32_t)MPU_CALIB_SAMPLES;
+    if (n > (uint32_t)(sizeof(s_calibBuf) / sizeof(s_calibBuf[0]))) {
+        n = (uint32_t)(sizeof(s_calibBuf) / sizeof(s_calibBuf[0]));
+    }
+
+    for (i = 0U; i < n; i++) {
         if (!mpu6050_read_gyro_z_raw(&raw)) {
             return false;
         }
-
-        float v = (float)raw / MPU_GYRO_SENS_500DPS;
-
-        sum += v;
-
-        if (v > max_v) max_v = v;
-        if (v < min_v) min_v = v;
-
-        delay_ms(3);
+        s_calibBuf[i] = (float)raw / MPU_GYRO_SENS_500DPS;
+        /* 贴近 125Hz 采样间隔，避免连读同一时刻 */
+        delay_ms(8U);
     }
 
-    /* 去掉极值（抗抖动） */
-    sum = sum - max_v - min_v;
-    g_gyro_z_bias = sum / (1200.0f - 2.0f);
+    gyro_calib_sort_asc(s_calibBuf, n);
 
-    g_gyro_z_dps  = 0.0f;
-    g_z_angle_deg = 0.0f;
+    trim = (uint32_t)MPU_CALIB_TRIM_EACH;
+    if ((trim * 2U) >= n) {
+        trim = (n / 10U);
+    }
+    lo  = trim;
+    hi  = n - trim;
+    sum = 0.0f;
+    for (i = lo; i < hi; i++) {
+        sum += s_calibBuf[i];
+    }
+    g_gyro_z_bias = sum / (float)(hi - lo);
+
+    g_gyro_z_dps      = 0.0f;
+    g_gyro_z_filt     = 0.0f;
+    g_gyro_filt_ready = false;
+    g_z_angle_deg     = 0.0f;
 
     g_mpu_run_enable = true;
     return true;
@@ -121,6 +202,7 @@ void mpu6050_on_data_ready_isr(void)
 {
     uint8_t intStatus = 0;
     int16_t raw = 0;
+    float   gyro;
 
     if (!g_mpu_run_enable) {
         return;
@@ -138,25 +220,8 @@ void mpu6050_on_data_ready_isr(void)
         return;
     }
 
-    float gyro = ((float)raw / MPU_GYRO_SENS_500DPS - g_gyro_z_bias) * GYRO_Z_SIGN;
-
-    if (gyro > -0.8f && gyro < 0.8f) {
-        gyro = 0.0f;
-    }
-
-    g_gyro_z_dps = gyro;
-
-    if (gyro != 0.0f) {
-        float dYaw = gyro * MPU6050_INT_DT_SEC;
-
-        g_z_angle_deg += dYaw;
-
-        if (g_z_angle_deg > 180.0f) {
-            g_z_angle_deg -= 360.0f;
-        } else if (g_z_angle_deg < -180.0f) {
-            g_z_angle_deg += 360.0f;
-        }
-    }
+    gyro = ((float)raw / MPU_GYRO_SENS_500DPS - g_gyro_z_bias) * GYRO_Z_SIGN;
+    (void)gyro_z_lpf_integrate(gyro);
 }
 
 float mpu6050_get_gyro_z_dps(void)
@@ -182,18 +247,12 @@ bool mpu6050_update_angles(void)
     float faz;
     float gyro;
 
-    /*
-     * 关 MPU 所在 GPIOA 中断，避免与 ISR 抢 I2C，
-     * 也避免 M0+ 软浮点在主循环与 ISR 中重入导致跑飞/卡死。
-     */
     NVIC_DisableIRQ(GPIO_MULTIPLE_GPIOA_INT_IRQN);
 
-    /* 一次读完 Accel(6) + Temp(2) + Gyro(6) */
     if (!mpu_i2c_read_bytes(MPU6050_ADDR, MPU6050_ACCEL_XOUT_H_REG, buf, 14U)) {
         return false;
     }
 
-    /* 清 data-ready 标志，防止 INT 一直挂起 */
     (void)mpu_i2c_read_byte(MPU6050_ADDR, MPU6050_INT_STATUS_REG, &intStatus);
 
     ax = (int16_t)(((uint16_t)buf[0] << 8) | buf[1]);
@@ -208,22 +267,16 @@ bool mpu6050_update_angles(void)
     g_roll_deg  = atan2f(fay, faz) * MPU_RAD_TO_DEG;
     g_pitch_deg = atan2f(-fax, sqrtf(fay * fay + faz * faz)) * MPU_RAD_TO_DEG;
 
-    /* 轮询周期与 main 中 Delay_ms(100) 对齐 */
+    /*
+     * 轮询路径仅更新姿态显示用的 roll/pitch；
+     * Z 角积分只由 DATA_READY ISR 按 125Hz×INT_DT 做，避免用错误的 0.1s 再积一次。
+     */
     gyro = ((float)gz / MPU_GYRO_SENS_500DPS - g_gyro_z_bias) * GYRO_Z_SIGN;
-    if ((gyro > -0.8f) && (gyro < 0.8f)) {
+    if ((gyro > -(float)GYRO_Z_DEADZONE_DPS) && (gyro < (float)GYRO_Z_DEADZONE_DPS)) {
         gyro = 0.0f;
     }
     g_gyro_z_dps = gyro;
-    if (gyro != 0.0f) {
-        g_z_angle_deg += gyro * 0.1f;
-        if (g_z_angle_deg > 180.0f) {
-            g_z_angle_deg -= 360.0f;
-        } else if (g_z_angle_deg < -180.0f) {
-            g_z_angle_deg += 360.0f;
-        }
-    }
 
-    /* 本测试走轮询，保持中断关闭，防止再次与主循环冲突 */
     return true;
 }
 
@@ -244,7 +297,9 @@ float mpu6050_get_yaw(void)
 
 void mpu6050_reset_z_angle(void)
 {
-    g_z_angle_deg = 0.0f;
+    g_z_angle_deg     = 0.0f;
+    g_gyro_z_filt     = 0.0f;
+    g_gyro_filt_ready = false;
 }
 
 static float mpu6050_angle_diff_deg(float now, float base)

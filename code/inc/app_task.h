@@ -80,8 +80,8 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid);
  * 演示状态机（Straight ↔ Arc）：
  *  - Straight：不循线，陀螺仪锁航向直行
  *  - 连续检测到线 → Arc
- *  - Arc→Straight：必须累计偏航 ≥ ARC_TARGET_DEG，且连续丢线、最短弧时
- *    （丢线但未转满角度时继续强转，不提前切 Straight）
+ *  - Arc→Straight：角满 + 末端线灭 + 最短弧时 + 已 Arc coast≥ARC_COAST_MIN_MS
+ *    （线灭不会立刻 Straight；|A|小异常丢线仍 Arc recover）
  */
 void app_task_demo_prepare(float arcMirrorDir);
 void app_task_demo_step(void);

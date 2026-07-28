@@ -376,29 +376,65 @@ void line_follow_drive(uint8_t pattern, float error, bool lineValid)
 }
 
 /* 弧线循迹：入弧辅助计时与方向 */
-static uint32_t g_arcPhaseMs   = 0U;
-static float    g_arcMirrorDir = 1.0f;
-static bool     g_arcLostSpin  = false; /* 丢线差速拧弯，直到 CH2+CH3 或转满 */
+static uint32_t g_arcPhaseMs    = 0U;
+static uint32_t g_arcCoastMs    = 0U; /* 末端 coast 已持续时长 */
+static float    g_arcMirrorDir  = 1.0f;
+static int16_t  g_arcCoastLeft  = 0; /* 贴线最后一拍 Cmd，弧末端线灭后沿用 */
+static int16_t  g_arcCoastRight = 0;
+static bool     g_arcRecovering = false; /* 异常走出线，原地找回中 */
+static bool     g_arcCoasting   = false; /* 弧线自然结束，保持差速滑行中 */
 
 void app_task_arc_prepare(float mirrorDir)
 {
+    int16_t bias;
+
     g_arcPhaseMs     = 0U;
+    g_arcCoastMs     = 0U;
     g_arcMirrorDir   = (mirrorDir >= 0.0f) ? 1.0f : -1.0f;
     g_arcYawLastDeg  = mpu6050_get_z_angle_deg();
     g_arcYawAccumDeg = 0.0f;
-    g_arcLostSpin    = false;
+    g_arcRecovering  = false;
+    g_arcCoasting    = false;
     g_lastError      = 0;
+
+    bias = (int16_t)ARC_CURVE_BIAS;
+    if (g_arcMirrorDir >= 0.0f) {
+        g_arcCoastLeft  = (int16_t)BASE_SPEED_ARC - bias;
+        g_arcCoastRight = (int16_t)BASE_SPEED_ARC + bias;
+    } else {
+        g_arcCoastLeft  = (int16_t)BASE_SPEED_ARC + bias;
+        g_arcCoastRight = (int16_t)BASE_SPEED_ARC - bias;
+    }
+    if (g_arcCoastLeft < 0) {
+        g_arcCoastLeft = 0;
+    }
+    if (g_arcCoastRight < 0) {
+        g_arcCoastRight = 0;
+    }
+
     pid_line_reset();
     pid_accel_reset();
     encoder_reset();
 }
 
+static void arc_apply_coast(uint8_t pattern, float errF, bool angleDone)
+{
+    g_arcCoasting   = true;
+    g_arcRecovering = false;
+    g_arcCoastMs   += (uint32_t)LOOP_PERIOD_MS;
+    chassis_set_openloop(g_arcCoastLeft, g_arcCoastRight);
+    line_follow_refresh_ui(pattern, errF, false,
+                           angleDone ? "Arc end wait    " : "Arc coast       ");
+}
+
 /*
  * line_follow_arc — 弧线循迹
  *
- * steer = 弯道前馈 + 红外 PD
- * 丢线：L=ARC_LOST_SPEED_L / R=ARC_LOST_SPEED_R（左弧），
- *       直到 CH2+CH3 亮或 |累计角|≥ARC_TARGET_DEG
+ * 有线：弯道前馈 + 红外 PD
+ * 线灭：
+ *   |累计角| ≥ ARC_END_COAST_DEG → 弧线自然结束，沿用上一拍轮速（必须 coast）
+ *   否则 → 异常走出线，原地差速找回
+ * 切 Straight 由 demo_step：angleOk + 已 coast 够久 + 线灭，不得线灭瞬间直切
  */
 void line_follow_arc(uint8_t pattern, float error, bool lineValid)
 {
@@ -409,30 +445,41 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     int16_t spdR;
     int16_t keepMin;
     float   errF;
+    float   absYaw;
     bool    valid;
     bool    leftArc;
-    bool    ch23On;
     bool    angleDone;
+    bool    nearArcEnd;
 
     g_arcPhaseMs += (uint32_t)LOOP_PERIOD_MS;
-    leftArc   = (g_arcMirrorDir >= 0.0f);
-    keepMin   = (int16_t)ARC_STEER_KEEP_MIN;
-    /* bit1=CH2, bit2=CH3 */
-    ch23On    = ((pattern & 0x06U) == 0x06U);
-    angleDone = (fabsf(g_arcYawAccumDeg) >= (float)ARC_TARGET_DEG);
+    leftArc    = (g_arcMirrorDir >= 0.0f);
+    keepMin    = (int16_t)ARC_STEER_KEEP_MIN;
+    absYaw     = fabsf(g_arcYawAccumDeg);
+    angleDone  = (absYaw >= (float)ARC_TARGET_DEG);
+    nearArcEnd = (absYaw >= (float)ARC_END_COAST_DEG);
 
     valid = line_calc_error_arc_f(pattern, &errF);
     (void)error;
     (void)lineValid;
 
-    if (!valid) {
-        g_arcLostSpin = true;
+    /* 已在末端 coast：只要仍无线，继续保持上一拍差速（哪怕角已满） */
+    if (g_arcCoasting && !valid) {
+        arc_apply_coast(pattern, errF, angleDone);
+        return;
     }
-    if (g_arcLostSpin) {
-        if (ch23On || angleDone) {
-            g_arcLostSpin = false;
+    if (g_arcCoasting && valid) {
+        /* 末端又摸到线：退出 coast，恢复贴线 */
+        g_arcCoasting = false;
+        g_arcCoastMs  = 0U;
+    }
+
+    if (g_arcRecovering) {
+        if (valid) {
+            g_arcRecovering = false;
+        } else if (nearArcEnd || angleDone) {
+            arc_apply_coast(pattern, errF, angleDone);
+            return;
         } else {
-            /* 左弧：左慢右快；右弧对调 */
             if (leftArc) {
                 spdL = (int16_t)ARC_LOST_SPEED_L;
                 spdR = (int16_t)ARC_LOST_SPEED_R;
@@ -441,21 +488,27 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
                 spdR = (int16_t)ARC_LOST_SPEED_L;
             }
             chassis_set_openloop(spdL, spdR);
-            line_follow_refresh_ui(pattern, errF, false, "Arc lost L12R40 ");
+            line_follow_refresh_ui(pattern, errF, false, "Arc recover     ");
             return;
         }
     }
 
     if (!valid) {
-        /* 角度已满仍全灭：交给状态机切 Straight，先停或保持差速 */
-        if (leftArc) {
-            chassis_set_openloop((int16_t)ARC_LOST_SPEED_L,
-                                 (int16_t)ARC_LOST_SPEED_R);
-        } else {
-            chassis_set_openloop((int16_t)ARC_LOST_SPEED_R,
-                                 (int16_t)ARC_LOST_SPEED_L);
+        if (nearArcEnd || angleDone) {
+            arc_apply_coast(pattern, errF, angleDone);
+            return;
         }
-        line_follow_refresh_ui(pattern, errF, false, "Arc lost done   ");
+
+        g_arcRecovering = true;
+        if (leftArc) {
+            spdL = (int16_t)ARC_LOST_SPEED_L;
+            spdR = (int16_t)ARC_LOST_SPEED_R;
+        } else {
+            spdL = (int16_t)ARC_LOST_SPEED_R;
+            spdR = (int16_t)ARC_LOST_SPEED_L;
+        }
+        chassis_set_openloop(spdL, spdR);
+        line_follow_refresh_ui(pattern, errF, false, "Arc recover     ");
         return;
     }
 
@@ -499,6 +552,9 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     if (spdR < 0) {
         spdR = 0;
     }
+
+    g_arcCoastLeft  = spdL;
+    g_arcCoastRight = spdR;
 
     chassis_set_with_accel(spdL, spdR);
     line_follow_refresh_ui(pattern, errF, true, "Arc             ");
@@ -1044,6 +1100,7 @@ void app_task_demo_step(void)
     bool    angleOk;
     bool    lostOk;
     bool    timeOk;
+    bool    coastOk;
 
     pattern   = line_read_pattern();
     anyLine   = (pattern != 0U);
@@ -1075,28 +1132,35 @@ void app_task_demo_step(void)
         g_arcYawAccumDeg += angle_diff_deg_live(yawNow, g_arcYawLastDeg);
         g_arcYawLastDeg   = yawNow;
 
-        if (!anyLine) {
+        /*
+         * 仅在接近弯末（|A|≥ARC_END_COAST_DEG）才累计线灭：
+         * 避免弯中途闪断把 lostOk 攒满，积分一到就直切 Straight。
+         */
+        if (!anyLine
+            && (fabsf(g_arcYawAccumDeg) >= (float)ARC_END_COAST_DEG)) {
             g_lineLostCnt++;
             g_lineSeeCnt = 0U;
-        } else {
+        } else if (anyLine) {
             g_lineLostCnt = 0U;
         }
 
         angleOk = (fabsf(g_arcYawAccumDeg) >= (float)ARC_TARGET_DEG);
         lostOk  = (g_lineLostCnt >= (uint8_t)LINE_LOST_HOLD_CNT);
         timeOk  = (g_arcPhaseMs >= (uint32_t)ARC_MIN_TIME_MS);
+        /* 必须先经历 Arc coast，且滑行够 ARC_COAST_MIN_MS */
+        coastOk = g_arcCoasting
+               && (g_arcCoastMs >= (uint32_t)ARC_COAST_MIN_MS);
 
         /*
-         * Arc→Straight 三者同时满足：
-         *   1) 陀螺仪累计 |A| ≥ ARC_TARGET_DEG（现 175°）
-         *   2) 连续丢线 ≥ LINE_LOST_HOLD_CNT
-         *   3) 入弧时间 ≥ ARC_MIN_TIME_MS
-         * 丢线时 L12/R40 拧到 CH23 或转满 175°。
+         * Arc→Straight：角满 + 末端线灭 + 最短弧时 + 已 coast 够久。
+         * 线灭瞬间即使角已满，也会先 Arc coast 保持差速，不会马上 Straight。
          */
-        if (angleOk && lostOk && timeOk) {
+        if (angleOk && lostOk && timeOk && coastOk) {
             g_demo_state     = DEMO_STATE_STRAIGHT;
             g_lineLostCnt    = 0U;
             g_lineSeeCnt     = 0U;
+            g_arcCoasting    = false;
+            g_arcCoastMs     = 0U;
             g_holdHeadingDeg = mpu6050_get_z_angle_deg();
             pid_line_reset();
             pid_accel_reset();
