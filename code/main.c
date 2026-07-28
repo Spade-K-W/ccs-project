@@ -15,9 +15,13 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 int main(void)
 {
+    uint32_t prDebugElapsedMs = 0U;
+    char prLine[24];
+
     SYSCFG_DL_init();
     line_sensor_gpio_init();
     board_safe_state();
@@ -42,16 +46,29 @@ int main(void)
     uart_debug_print_boot_ok();
 
     /*
-     * 3. Straight ↔ Arc 状态机：
+     * 3. Straight <-> Arc 状态机：
      *    Straight：不循线，陀螺仪锁航向直行
-     *    连续见线 → Arc 弧线循迹
-     *    累计偏航 ≥ ARC_TARGET_DEG 且连续丢线 → 回 Straight
+     *    连续见线 -> Arc 弧线循迹
+     *    累计偏航 >= ARC_TARGET_DEG 且连续丢线 -> 回 Straight
      *    （未转满角度时丢线会继续强转，不会提前直行）
      */
     app_task_demo_prepare(+1.0f); /* +1 左圆弧；贴反了改 -1.0f */
 
     while (1) {
         app_task_demo_step();
+
+         prDebugElapsedMs += (uint32_t)LOOP_PERIOD_MS;
+        if (prDebugElapsedMs >= 200U) {
+            prDebugElapsedMs = 0U;
+            (void)mpu6050_update_pitch_roll();
+
+            snprintf(prLine, sizeof(prLine), "P:%+6.1f deg   ", mpu6050_get_pitch());
+            oled_display_string(6, 0, prLine);
+
+            snprintf(prLine, sizeof(prLine), "R:%+6.1f deg   ", mpu6050_get_roll());
+            oled_display_string(7, 0, prLine);
+        }
+
         /* #if BLUETOOTH_ENABLE
          * bluetooth_send_oled_now();
          * #endif

@@ -10,7 +10,10 @@ bool mpu6050_init(void);
 /* 静止状态下校准陀螺仪 Z 轴零偏 */
 bool mpu6050_calibrate_bias(void);
 
-/* 上电启动：提示静止 → 初始化 → 开中断 → 校准零偏 → 角度清零；失败则提示并停住 */
+/* 静止水平状态下校准 pitch/roll 零点 */
+bool mpu6050_calibrate_level_offsets(uint16_t samples);
+
+/* 上电启动：提示静止 -> 初始化 -> 开中断 -> 校准零偏 -> 角度清零；失败则提示并停住 */
 void mpu6050_startup(void);
 
 /* 读取 Z 轴原始值 */
@@ -24,6 +27,9 @@ float mpu6050_get_z_angle_deg(void);
 
 /* 轮询更新俯仰角/翻滚角/旋转角 */
 bool mpu6050_update_angles(void);
+
+/* 只更新 pitch/roll，不更新 yaw */
+bool mpu6050_update_pitch_roll(void);
 
 /* 翻滚角 / 俯仰角 / 旋转角，单位：deg */
 float mpu6050_get_roll(void);
