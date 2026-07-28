@@ -118,8 +118,39 @@ bool line_calc_error_f(uint8_t pattern, float *error)
     if (!line_calc_error_common(pattern, &sum, &cnt)) {
         return false;
     }
-//算出了error
     *error = (float)sum / (float)cnt;
+    return true;
+}
+
+bool line_calc_error_arc_f(uint8_t pattern, float *error)
+{
+    /* CH4/CH5 权重 0：对准 4、5 时 error≈0 */
+    static const int8_t weights[LINE_SENSOR_CHANNEL_COUNT] = {
+        (int8_t)LINE_WEIGHT_ARC_CH1,
+        (int8_t)LINE_WEIGHT_ARC_CH2,
+        (int8_t)LINE_WEIGHT_ARC_CH3,
+        (int8_t)LINE_WEIGHT_ARC_CH4,
+        (int8_t)LINE_WEIGHT_ARC_CH5,
+        (int8_t)LINE_WEIGHT_ARC_CH6,
+        (int8_t)LINE_WEIGHT_ARC_CH7,
+        (int8_t)LINE_WEIGHT_ARC_CH8
+    };
+    int16_t acc = 0;
+    uint8_t n = 0;
+    uint8_t i;
+
+    for (i = 0; i < LINE_SENSOR_CHANNEL_COUNT; i++) {
+        if (pattern & (1U << i)) {
+            acc += weights[i];
+            n++;
+        }
+    }
+
+    if (n == 0U) {
+        return false;
+    }
+
+    *error = (float)acc / (float)n;
     return true;
 }
 

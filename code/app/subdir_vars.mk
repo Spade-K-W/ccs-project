@@ -10,7 +10,6 @@ C_SRCS += \
 ../code/app/app_utils.c \
 ../code/app/chapter.c \
 ../code/app/choosing.c \
-../code/app/key.c \
 ../code/app/pid.c 
 
 C_DEPS += \
@@ -18,7 +17,6 @@ C_DEPS += \
 ./code/app/app_utils.d \
 ./code/app/chapter.d \
 ./code/app/choosing.d \
-./code/app/key.d \
 ./code/app/pid.d 
 
 OBJS += \
@@ -26,7 +24,6 @@ OBJS += \
 ./code/app/app_utils.o \
 ./code/app/chapter.o \
 ./code/app/choosing.o \
-./code/app/key.o \
 ./code/app/pid.o 
 
 OBJS__QUOTED += \
@@ -34,7 +31,6 @@ OBJS__QUOTED += \
 "code\app\app_utils.o" \
 "code\app\chapter.o" \
 "code\app\choosing.o" \
-"code\app\key.o" \
 "code\app\pid.o" 
 
 C_DEPS__QUOTED += \
@@ -42,7 +38,6 @@ C_DEPS__QUOTED += \
 "code\app\app_utils.d" \
 "code\app\chapter.d" \
 "code\app\choosing.d" \
-"code\app\key.d" \
 "code\app\pid.d" 
 
 C_SRCS__QUOTED += \
@@ -50,7 +45,4 @@ C_SRCS__QUOTED += \
 "../code/app/app_utils.c" \
 "../code/app/chapter.c" \
 "../code/app/choosing.c" \
-"../code/app/key.c" \
 "../code/app/pid.c" 
-
-

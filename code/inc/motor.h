@@ -21,8 +21,13 @@ bool motor_driver_is_enabled(void);
  */
 void motor_set_speed(Motor *m, int16_t speed);
 
-/* 设置底盘左右轮速度（-100~100，负值为倒转） */
+/* 设置底盘物理左右轮速度（-100~100，负值为倒转）
+ * 左=M3+M4 同速，右=M1+M2 同速
+ */
 void chassis_set(int16_t leftSpeed, int16_t rightSpeed);
+
+/* 四电机独立速度（调试用）：A=M1, B=M2, C=M3, D=M4 */
+void chassis_set4(int16_t speedA, int16_t speedB, int16_t speedC, int16_t speedD);
 
 /* 停止底盘 */
 void chassis_stop(void);

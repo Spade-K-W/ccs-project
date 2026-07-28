@@ -62,20 +62,28 @@ void motor_set_speed(Motor *m, int16_t speed)
 }
 
 /* =========================================================
- * 设置底盘左右轮速度
- * 速度范围：-100 ~ 100（负值为倒转，用于原地转弯）
- * 左轮：motor1、motor2
- * 右轮：motor3、motor4
+ * 设置底盘左右轮速度（物理左右）
+ * 速度范围：-100 ~ 100（负值为倒转）
+ * 物理左：M3 左前 + M4 左后（同速）
+ * 物理右：M1 右后 + M2 右前（同速）
  * ========================================================= */
 void chassis_set(int16_t leftSpeed, int16_t rightSpeed)
 {
     leftSpeed  = clamp_i16(leftSpeed,  -100, 100);
     rightSpeed = clamp_i16(rightSpeed, -100, 100);
 
-    motor_set_speed(&motor1, leftSpeed);
-    motor_set_speed(&motor2, leftSpeed);
-    motor_set_speed(&motor3, rightSpeed);
-    motor_set_speed(&motor4, rightSpeed);
+    motor_set_speed(&motor1, rightSpeed); /* M1 右后 */
+    motor_set_speed(&motor2, rightSpeed); /* M2 右前 */
+    motor_set_speed(&motor3, leftSpeed);  /* M3 左前 */
+    motor_set_speed(&motor4, leftSpeed);  /* M4 左后 */
+}
+
+void chassis_set4(int16_t speedA, int16_t speedB, int16_t speedC, int16_t speedD)
+{
+    motor_set_speed(&motor1, clamp_i16(speedA, -100, 100));
+    motor_set_speed(&motor2, clamp_i16(speedB, -100, 100));
+    motor_set_speed(&motor3, clamp_i16(speedC, -100, 100));
+    motor_set_speed(&motor4, clamp_i16(speedD, -100, 100));
 }
 
 /* 底盘停车 */

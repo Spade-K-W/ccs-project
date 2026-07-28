@@ -65,6 +65,12 @@
 /* 串口调试数据发送间隔 */
 #define UART_DEBUG_PRINT_INTERVAL_MS (50U)   /* 串口 0.05s 输出一次（仅转弯） */
 
+/* 蓝牙透传（Bluetooth_UART_1：RX=PA9，TX=PB4）：主循环调用，按间隔发 OLED 六行 */
+#define BLUETOOTH_ENABLE             (0U)
+#define BLUETOOTH_SEND_INTERVAL_MS   (20U)
+/* 上电握手：周期广播 BT_READY，收到对端 BT_READY/BT_ACK 即视为链路 OK */
+#define BLUETOOTH_HANDSHAKE_RETRY_MS (100U)
+
 /* =========================================================
  * 视觉模块 SPI（SPI_1 = 硬件 SPI0）— TI 从机 / 泰山派主机
  *   三线无 CS：SCLK=PB18，PICO=PA14，POCI=PA13(MISO 出数)
@@ -96,28 +102,24 @@
 #define ENC_SPEED_FIT_B             (0.0f)
 
 /* =========================================================
- * 速度参数
+ * 速度参数（直线 / 路口原地转，不含弧线）
  * ========================================================= */
-#define BASE_SPEED_STRAIGHT         (25)//直线循迹速度
-#define BASE_SPEED_ARC              (20)//弧线循迹速度
-#define SEARCH_SPEED_LOW            (3)
-#define SEARCH_SPEED_HIGH           (7)
+#define BASE_SPEED_STRAIGHT         (25) /* 直线锁航向 / 循迹共模速度 */
 
 /*
- * 非对称转弯（不再左右 |PWM| 相等）：
- *   左转：左内侧倒退较小，右外侧前进较大  → |R| > |L|
- *   右转：右内侧倒退较小，左外侧前进较大  → |L| > |R|
- * OUTER 应明显大于 INNER；整体偏小可降“转太快”
+ * 路口原地转（CH123/678 状态机用，与弧线四电机无关）：
+ *   左转：左内侧倒退较小，右外侧前进较大
+ *   右转：右内侧倒退较小，左外侧前进较大
  */
 #define TURN_INNER_SPEED            (18)
 #define TURN_OUTER_SPEED            (22)
+#define SEARCH_SPEED_LOW            (3)  /* 丢线搜线：慢侧 PWM */
+#define SEARCH_SPEED_HIGH           (8)  /* 丢线搜线：快侧 PWM */
 
-/* 检测到 CH123/CH678 后先直行再转弯的预延时(ms)     转弯要调*/
+/* 检测到 CH123/CH678 后先直行再转弯的预延时(ms) */
 #define TURN_DETECT_DELAY_MS        (25U)
-
-/* 转弯完成判定：相对进入转弯时的偏航角（度）         转弯要调*/
+/* 转弯完成判定：相对进入转弯时的偏航角（度） */
 #define TURN_TARGET_DEG             (83.00f)
-
 /* 一圈所需路口次数：每次 CH123 或 CH678 全亮计 1 次，满 4 次记 1 圈 */
 #define CORNERS_PER_LAP             (4U)
 
@@ -140,8 +142,11 @@
 /* 线误差 D 项系数：D = KD × d(error)/dt（error 单位约 /s，建议 0.05~0.20） */
 #define KD_LINE_STRAIGHT            (0.04f)
 
-/* 陀螺仪航向辅助系数（直线微调用，建议 0.3~0.8） */
+/* 陀螺仪航向辅助系数（无线直行锁航向，建议 0.3~1.2） */
 #define K_HEADING_STRAIGHT          (0.8f)
+
+/* 航向误差死区（度）：小于该值不纠偏 */
+#define HEADING_ERROR_DEADZONE_DEG  (0.8f)
 
 /* 直线最短保护时间(ms)，防止出发时误触发到达判断 */
 #define STRAIGHT_MIN_TIME_MS        (800U)
@@ -156,14 +161,14 @@
 
 /* =========================================================
  * 编码器 + 速度内环（PWM 单位）
- * 左 M1:A=PB19/B=PA31  右 M4:A=PA3/B=PA4
+ * 物理左编码器=M4，物理右编码器=M1
  * ========================================================= */
 /*
- * 前进为正。空转时若 Mea 左负右正，把 ENC_LEFT_REVERSE 置 true。
- * （左 -48 / 右 +49 时平均≈0，速度环会误以为停转，把 Out 顶到 16+3=19）
+ * 前进为正。正转时若 Mea 为负，把对应侧 ENC_*_REVERSE 取反。
+ * （左右符号相反时平均≈0，速度环会误以为停转、把 Out 顶满）
  */
-#define ENC_LEFT_REVERSE            (true)
-#define ENC_RIGHT_REVERSE           (false)
+#define ENC_LEFT_REVERSE            (false)
+#define ENC_RIGHT_REVERSE           (true)
 
 /* 转速低通（0.2~0.6） */
 #define ENC_SPEED_FILTER_ALPHA      (0.45f)
@@ -172,12 +177,12 @@
  * 实测等效 PWM（无零点偏置）：
  *   Mea = Spd / PWM_TO_SPEED_GAIN
  * 停车 Spd=0 → Mea=0，不需要另做零点标定。
- * 标定：关内环 ACCEL_LOOP_ENABLE=0，固定 Cmd=16 空转，
- *   看 Spd（或 Mea×GAIN），令 GAIN ≈ |Spd| / 16，使 Mea≈16。
- * 空转 Cmd=16 时 Mea 曾显示约 13.2/14.2（旧 GAIN=1.06）→
- *   Spd≈14.5，GAIN≈14.5/16≈0.91
+ * 标定：关内环 ACCEL_LOOP_ENABLE=0，固定 Cmd 空转，
+ *   令 GAIN ≈ (旧Mea × 旧GAIN) / Cmd，使新 Mea≈Cmd。
+ * 本次：Cmd=25 时旧 GAIN=0.91 下 Mea≈21
+ *   → GAIN = 21×0.91/25 ≈ 0.76
  */
-#define PWM_TO_SPEED_GAIN           (0.91f)
+#define PWM_TO_SPEED_GAIN           (0.76f)
 
 /* 使能速度内环（0=只测速显示，不修正 PWM） */
 #define ACCEL_LOOP_ENABLE           (1)
@@ -219,25 +224,63 @@
 #define HEADING_OFFSET_BD           (130.0f)   /* 需实测微调 */
 
 /* =========================================================
- * 弧线段参数
+ * 弧线循迹（全部调参集中在此）
+ *
+ * 思路：
+ *   1) ARC_CURVE_BIAS：弯道前馈，线在正中时也持续转弯（贴弧关键）
+ *   2) 红外 PD：把车压回 CH4/CH5
+ *   3) L = BASE + steer，R = BASE - steer（同向差速）
+ * prepare(+1)=左圆弧（右轮更快）；prepare(-1)=右圆弧
  * ========================================================= */
 
-/* 弧线循迹比例系数 */
-#define KP_LINE_ARC                 (6)
+/* --- 1) 速度 --- */
+#define BASE_SPEED_ARC              (10)  /* 共模略降，把余量留给差速 */
+/*
+ * 线在正中时的弯道前馈差速（转不过就加大）：
+ *   左弧 prepare(+1)：L=BASE-BIAS, R=BASE+BIAS
+ *   右弧 prepare(-1)：相反
+ */
+#define ARC_CURVE_BIAS              (20)
+/*
+ * 弧向最小差速：左弧 steer 上限为 -MIN（绝不因 CH678 变成右转）；
+ * 右弧 steer 下限为 +MIN。建议 4~8
+ */
+#define ARC_STEER_KEEP_MIN          (8)
+/*
+ * 弧线丢线搜线：左弧 L=慢 R=快（同向前进拧弯）；
+ * 直到 CH2+CH3 亮，或累计偏航 ≥ ARC_TARGET_DEG。
+ */
+#define ARC_LOST_SPEED_L            (0)
+#define ARC_LOST_SPEED_R            (30)
+/* 丢线搜线用全局 SEARCH_SPEED_LOW / SEARCH_SPEED_HIGH */
 
-/* 入弧辅助偏置有效时间(ms) */
-#define ARC_ENTER_ASSIST_MS         (200U)
+/* --- 2) 红外外环 --- */
+/* CH4/CH5=0：压在中心时 error≈0 */
+#define LINE_WEIGHT_ARC_CH1         (-6)
+#define LINE_WEIGHT_ARC_CH2         (-5)
+#define LINE_WEIGHT_ARC_CH3         (-4)
+#define LINE_WEIGHT_ARC_CH4         (-3)
+#define LINE_WEIGHT_ARC_CH5         (-2)
+#define LINE_WEIGHT_ARC_CH6         (-1)
+#define LINE_WEIGHT_ARC_CH7         (0)
+#define LINE_WEIGHT_ARC_CH8         (1)
 
-/* 入弧差速偏置量 */
-#define ARC_ENTER_TURN_BIAS         (10)
+#define KP_LINE_ARC                 (24.0f) /* 偏线时再加大拧弯 */
+#define KD_LINE_ARC                 (0.5f)
+#define LINE_ERROR_DEADZONE_ARC     (0.25f)
+#define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
+#define KD_GYRO_ARC                 (0.00f)
+#define KD_GYRO_ARC_SIGN            (1)
+#define ARC_DIFF_MAX                (45)  /* |steer| 总限幅；须 ≥ CURVE_BIAS+ENTER */
 
-/* 半圆弧目标累计角度（略小于180°留余量） */
-#define ARC_TARGET_DEG              (155.0f)
+#define ARC_ENTER_ASSIST_MS         (400U)
+#define ARC_ENTER_TURN_BIAS         (14)  /* 入弧再加拧，帮助咬住弯 */
 
-/* 弧线段最短持续时间(ms) */
-#define ARC_MIN_TIME_MS             (900U)
-
-/* 弧线退出时允许的红外误差容限 */
+/* --- 3) Straight ↔ Arc --- */
+#define LINE_DETECT_HOLD_CNT        (3U)
+#define LINE_LOST_HOLD_CNT          (8U)
+#define ARC_TARGET_DEG              (180.0f) /* Arc→Straight / 丢线结束：累计偏航 */
+#define ARC_MIN_TIME_MS             (1200U)
 #define ARC_EXIT_ERR_BAND           (1)
 
 /* =========================================================

@@ -2,6 +2,7 @@
 #include "app_config.h"
 #include "app_utils.h"
 #include "encoder.h"
+#include "mpu6050.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,6 +14,11 @@
 static float s_lineErrFiltered = 0.0f;
 static float s_lineErrPrev     = 0.0f;
 static bool  s_dReady          = false;
+
+/* 弧线循迹滤波 / D 状态（与直线分开，避免串扰） */
+static float s_arcErrFiltered = 0.0f;
+static float s_arcErrPrev     = 0.0f;
+static bool  s_arcDReady      = false;
 
 typedef struct {
     float errPrev;
@@ -48,6 +54,17 @@ static int16_t pid_clamp_diff(int16_t diff)
     }
     if (diff < -(int16_t)STRAIGHT_DIFF_MAX) {
         return -(int16_t)STRAIGHT_DIFF_MAX;
+    }
+    return diff;
+}
+
+static int16_t pid_clamp_diff_arc(int16_t diff)
+{
+    if (diff > (int16_t)ARC_DIFF_MAX) {
+        return (int16_t)ARC_DIFF_MAX;
+    }
+    if (diff < -(int16_t)ARC_DIFF_MAX) {
+        return -(int16_t)ARC_DIFF_MAX;
     }
     return diff;
 }
@@ -95,6 +112,10 @@ void pid_line_reset(void)
     s_lineErrFiltered = 0.0f;
     s_lineErrPrev     = 0.0f;
     s_dReady          = false;
+
+    s_arcErrFiltered = 0.0f;
+    s_arcErrPrev     = 0.0f;
+    s_arcDReady      = false;
 }
 
 int16_t pid_line_calc_diff(float error)
@@ -104,6 +125,55 @@ int16_t pid_line_calc_diff(float error)
     float dTerm       = pid_d_term_error_rate(filteredErr);
 
     return pid_clamp_diff((int16_t)(pTerm + dTerm));
+}
+
+int16_t pid_line_arc_calc_diff(float error, float mirrorDir)
+{
+    float filteredErr;
+    float pTerm;
+    float dTerm;
+    float gyroTerm;
+    float diffF;
+    float dtSec;
+    float dErr;
+    float gyroZ;
+
+    (void)mirrorDir; /* 弯道方向由 line_follow_arc 前馈处理，此处只做贴线 PD */
+
+    /* 死区 + 低通 */
+    if ((error > -(float)LINE_ERROR_DEADZONE_ARC)
+        && (error < (float)LINE_ERROR_DEADZONE_ARC)) {
+        error = 0.0f;
+    }
+    filteredErr = (LINE_ERROR_FILTER_ALPHA_ARC * error)
+                + ((1.0f - LINE_ERROR_FILTER_ALPHA_ARC) * s_arcErrFiltered);
+    s_arcErrFiltered = filteredErr;
+
+    /* P：error>0（线偏右/CH678）→ 正差速 → 左快右慢 → 右转回线 */
+    pTerm = (float)KP_LINE_ARC * filteredErr;
+
+    /* D：抑制抖动 */
+    if (!s_arcDReady) {
+        s_arcErrPrev = filteredErr;
+        s_arcDReady  = true;
+        dTerm        = 0.0f;
+    } else {
+        dtSec = (float)LOOP_PERIOD_MS / 1000.0f;
+        if (dtSec > 0.0f) {
+            dErr  = (filteredErr - s_arcErrPrev) / dtSec;
+            dTerm = (float)KD_LINE_ARC * dErr;
+        } else {
+            dTerm = 0.0f;
+        }
+        s_arcErrPrev = filteredErr;
+    }
+
+    /* 陀螺角速度阻尼（可选） */
+    gyroZ    = mpu6050_get_gyro_z_dps();
+    gyroTerm = -(float)KD_GYRO_ARC * (float)KD_GYRO_ARC_SIGN * gyroZ;
+
+    diffF = pTerm + dTerm + gyroTerm;
+    return pid_clamp_diff_arc(pid_round_i16(diffF));
 }
 
 void pid_accel_reset(void)
@@ -217,7 +287,7 @@ void pid_accel_apply(int16_t *leftPwm, int16_t *rightPwm)
         return;
     }
 
-    /* 转弯→直线：清转弯积分一次 */
+    /* 转弯→直线：清积分一次 */
     if (s_turnLoopActive) {
         speed_state_reset(&s_spdL);
         speed_state_reset(&s_spdR);

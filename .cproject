@@ -40,7 +40,6 @@
                                     <listOptionValue value="${PROJECT_ROOT}/${ConfigName}"/>
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source/third_party/CMSIS/Core/Include"/>
                                     <listOptionValue value="${COM_TI_MSPM0_SDK_INSTALL_DIR}/source"/>
-                                    <listOptionValue value="${PROJECT_ROOT}/code/te'x't/h"/>
                                     <listOptionValue value="${PROJECT_ROOT}/code/inc"/>
                                     <listOptionValue value="${PROJECT_ROOT}/code/TIMA1_PWM_RGB"/>
                                 </option>

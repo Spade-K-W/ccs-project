@@ -233,8 +233,8 @@ void encoder_update(void)
     }
     __enable_irq();
 
-    dL = now[0] - s_cntPrev[0];
-    dR = now[1] - s_cntPrev[1];
+    dL = now[1] - s_cntPrev[1]; /* M4 左后 → 物理左 */
+    dR = now[0] - s_cntPrev[0]; /* M1 右后 → 物理右 */
     for (i = 0U; i < 2U; i++) {
         s_cntPrev[i] = now[i];
     }
@@ -275,8 +275,8 @@ void encoder_get_counts(EncoderCounts *out)
         return;
     }
     __disable_irq();
-    out->leftCount  = s_cnt[0];
-    out->rightCount = s_cnt[1];
+    out->leftCount  = s_cnt[1]; /* M4 左后 */
+    out->rightCount = s_cnt[0]; /* M1 右后 */
     __enable_irq();
 }
 
@@ -286,8 +286,8 @@ void encoder_get_motor_counts(int32_t out[2])
         return;
     }
     __disable_irq();
-    out[0] = s_cnt[0];  /* M1 左 */
-    out[1] = s_cnt[1];  /* M4 右 */
+    out[0] = s_cnt[0];  /* M1 右后 */
+    out[1] = s_cnt[1];  /* M4 左后 */
     __enable_irq();
 }
 
@@ -324,8 +324,8 @@ int32_t encoder_get_vehicle_pos_pulses(void)
     int32_t right;
 
     __disable_irq();
-    left  = s_cnt[0];
-    right = s_cnt[1];
+    left  = s_cnt[1]; /* M4 物理左 */
+    right = s_cnt[0]; /* M1 物理右 */
     __enable_irq();
 
     if (ENC_LEFT_REVERSE) {

@@ -35,7 +35,7 @@ void encoder_reset(void);
 void encoder_speed_restart(void);
 
 void encoder_get_counts(EncoderCounts *out);
-/* 左右编码器原始 A 相边沿累计脉冲：out[0]=M1 左，out[1]=M4 右 */
+/* 左右编码器原始计数：out[0]=M1 右后，out[1]=M4 左后 */
 void encoder_get_motor_counts(int32_t out[2]);
 void encoder_get_speeds(EncoderSpeeds *out);
 

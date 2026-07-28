@@ -16,7 +16,6 @@ void uart_debug_putc(char c)
 {
     uint32_t guard = 50000U;
 
-    /* 非阻塞：TX FIFO 满超时就丢弃，避免调试口卡住整车 */
     while (DL_UART_Main_isTXFIFOFull(UART_0_INST) != false) {
         if (--guard == 0U) {
             return;
@@ -61,50 +60,66 @@ void uart_debug_print_mpu_calib_fail(void)
     uart_debug_puts("MPU6050 calibrate failed\r\n");
 }
 
-void uart_debug_build_status(UartDebugStatus *st, float error, bool lineValid,
-                             uint8_t pattern, int16_t leftSpd, int16_t rightSpd,
-                             float zAngle, uint32_t laps, const char *mode)
+static void pattern_to_bits(char *buf, size_t n, uint8_t pattern)
 {
+    uint8_t i;
+
+    if ((buf == NULL) || (n < 9U)) {
+        return;
+    }
+    /* CH1..CH8 = bit0..bit7，显示成 00011000 */
+    for (i = 0U; i < 8U; i++) {
+        buf[i] = ((pattern & (1U << i)) != 0U) ? '1' : '0';
+    }
+    buf[8] = '\0';
+}
+
+void uart_debug_build_status6(UartDebugStatus *st,
+                              const char *state,
+                              uint8_t pattern,
+                              int16_t cmdL, int16_t cmdR,
+                              float meaL, float meaR,
+                              int16_t corrL, int16_t corrR,
+                              float zAngle)
+{
+    char bits[9];
+
     if (st == NULL) {
         return;
     }
 
-    if (lineValid) {
-        snprintf(st->line_err, sizeof(st->line_err),
-                 "err:%+.1f pat:%02X", error, (unsigned)pattern);
+    pattern_to_bits(bits, sizeof(bits), pattern);
+
+    if (state != NULL) {
+        snprintf(st->line_state, sizeof(st->line_state), "%-16s", state);
     } else {
-        snprintf(st->line_err, sizeof(st->line_err),
-                 "LOST  pat:%02X", (unsigned)pattern);
+        snprintf(st->line_state, sizeof(st->line_state), "Straight        ");
     }
 
-    snprintf(st->line_spd, sizeof(st->line_spd),
-             "L:%4d R:%4d    ", (int)leftSpd, (int)rightSpd);
+    snprintf(st->line_pat, sizeof(st->line_pat), "%s        ", bits);
+    snprintf(st->line_cmd, sizeof(st->line_cmd),
+             "Cmd L:%3d R:%3d", (int)cmdL, (int)cmdR);
+    snprintf(st->line_mea, sizeof(st->line_mea),
+             "Mea L:%4.1f R:%4.1f", meaL, meaR);
+    snprintf(st->line_corr, sizeof(st->line_corr),
+             "CorrL:%+3d R:%+3d", (int)corrL, (int)corrR);
     snprintf(st->line_angle, sizeof(st->line_angle),
-             "ZAngle:%+6.1f deg ", zAngle);
-    snprintf(st->line_laps, sizeof(st->line_laps),
-             "Laps:%lu         ", (unsigned long)laps);
-
-    if (mode != NULL) {
-        snprintf(st->line_mode, sizeof(st->line_mode), "%-16s", mode);
-    } else {
-        snprintf(st->line_mode, sizeof(st->line_mode), "go straight     ");
-    }
+             "Z:%+7.1f deg   ", zAngle);
 }
 
 static void uart_debug_print_status_now(const UartDebugStatus *st)
 {
-    /* 与 OLED 对齐：1标题 2误差 3轮速 4状态 5 Z角 6圈数 */
-    uart_debug_puts("Line Follow");
+    uart_debug_puts(st->line_state);
     uart_debug_puts("\r\n");
-    uart_debug_puts(st->line_err);
+    uart_debug_puts(st->line_pat);
     uart_debug_puts("\r\n");
-    uart_debug_puts(st->line_spd);
+    uart_debug_puts(st->line_cmd);
     uart_debug_puts("\r\n");
-    uart_debug_puts(st->line_mode);
+    uart_debug_puts(st->line_mea);
+    uart_debug_puts("\r\n");
+    uart_debug_puts(st->line_corr);
     uart_debug_puts("\r\n");
     uart_debug_puts(st->line_angle);
-    uart_debug_puts("\r\n");
-    uart_debug_puts(st->line_laps);
     uart_debug_puts("\r\n");
 }
 

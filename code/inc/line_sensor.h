@@ -23,6 +23,9 @@ bool line_calc_error(uint8_t pattern, int16_t *error);
 /* 根据 8 路红外模式计算循迹误差（浮点，OLED 显示用） */
 bool line_calc_error_f(uint8_t pattern, float *error);
 
+/* 弧线专用误差：权重让 CH4/CH5 为中心（两路权重为 0） */
+bool line_calc_error_arc_f(uint8_t pattern, float *error);
+
 /* 判断当前红外模式是否像顶点/路口特征 */
 bool is_vertex_like_pattern(uint8_t pattern);
 

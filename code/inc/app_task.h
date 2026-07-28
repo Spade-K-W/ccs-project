@@ -73,8 +73,18 @@ void line_follow_right_turn(uint8_t pattern, float error, bool lineValid);
  */
 void app_task_arc_prepare(float mirrorDir);
 
-/* 弧线循迹单步：外环差速 + 内环速度环（同直线 chassis_set_with_accel） */
+/* 弧线循迹单步：弯道前馈 + 红外 PD，同侧前后同速 */
 void line_follow_arc(uint8_t pattern, float error, bool lineValid);
+
+/*
+ * 演示状态机（Straight ↔ Arc）：
+ *  - Straight：不循线，陀螺仪锁航向直行
+ *  - 连续检测到线 → Arc
+ *  - Arc→Straight：必须累计偏航 ≥ ARC_TARGET_DEG，且连续丢线、最短弧时
+ *    （丢线但未转满角度时继续强转，不提前切 Straight）
+ */
+void app_task_demo_prepare(float arcMirrorDir);
+void app_task_demo_step(void);
 
 /*
  * 循迹状态机单步（主循环每拍调用）：
