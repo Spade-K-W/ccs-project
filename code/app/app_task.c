@@ -30,6 +30,7 @@ typedef enum {
 } LineDriveState;
 
 static LineDriveState g_line_state = LINE_STATE_STRAIGHT;
+static bool g_oledDebugEnabled = true;
 
 /* CH123/CH678 路口累计：每 CORNERS_PER_LAP 次记 1 圈 */
 static uint32_t g_corner_count = 0U;
@@ -111,6 +112,11 @@ void app_task_set_speed_percent(uint8_t percent)
     g_driveSpeedPercent = percent;
 }
 
+void app_task_set_oled_debug_enabled(bool enabled)
+{
+    g_oledDebugEnabled = enabled;
+}
+
 /*
  * OLED / 串口六行（与 uart_debug 对齐）：
  *  0 Straight / Arc
@@ -176,12 +182,14 @@ static void line_follow_refresh_ui(uint8_t pattern, float error, bool lineValid,
                  mpu6050_get_z_angle_deg());
     }
 
-    oled_display_string(0, 0, lineState);
-    oled_display_string(1, 0, linePat);
-    oled_display_string(2, 0, lineCmd);
-    oled_display_string(3, 0, lineMea);
-    oled_display_string(4, 0, lineCorr);
-    oled_display_string(5, 0, lineAngle);
+    if (g_oledDebugEnabled) {
+        oled_display_string(0, 0, lineState);
+        oled_display_string(1, 0, linePat);
+        oled_display_string(2, 0, lineCmd);
+        oled_display_string(3, 0, lineMea);
+        oled_display_string(4, 0, lineCorr);
+        oled_display_string(5, 0, lineAngle);
+    }
 
     uart_debug_build_status6(&dbg, mode, pattern,
                              g_cmdLeft, g_cmdRight,
@@ -279,8 +287,10 @@ void line_follow_drive(uint8_t pattern, float error, bool lineValid)
             left  = (int16_t)SEARCH_SPEED_HIGH;
             right = (int16_t)SEARCH_SPEED_LOW;
         }
-        left  = drive_scale_speed(left);
-        right = drive_scale_speed(right);
+        if (!pid_is_key3_profile()) {
+            left  = drive_scale_speed(left);
+            right = drive_scale_speed(right);
+        }
         chassis_set_with_accel(left, right);
         line_follow_refresh_ui(pattern, error, lineValid, "go straight     ");
         return;
@@ -375,6 +385,7 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     int16_t spdL;
     int16_t spdR;
     int16_t keepMin;
+    int16_t enterAssistBias;
     float   errF;
     float   absYaw;
     bool    valid;
@@ -387,7 +398,7 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
      * 弧线准备段：进入弧线状态后的前 ARC_LINE_ONLY_MS，
      * 仍使用普通红外巡线，不施加任何强制左/右转前馈。
      */
-    if (g_arcPhaseMs <= (uint32_t)ARC_LINE_ONLY_MS) {
+    if (g_arcPhaseMs < (uint32_t)ARC_LINE_ONLY_MS) {
         float straightError = 0.0f;
         bool straightValid = line_calc_error_f(pattern, &straightError);
 
@@ -461,18 +472,21 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
 
     g_lastError = (int16_t)errF;
     pd = pid_line_arc_calc_diff(errF, 1.0f);
+    enterAssistBias = pid_is_key3_profile()
+        ? (int16_t)ARC_ENTER_TURN_BIAS_KEY3
+        : (int16_t)ARC_ENTER_TURN_BIAS;
 
     if (leftArc) {
         feedforward = -(int16_t)ARC_CURVE_BIAS;
-          if (g_arcPhaseMs <=
+        if (g_arcPhaseMs <=
             ((uint32_t)ARC_LINE_ONLY_MS + (uint32_t)ARC_ENTER_ASSIST_MS)) {
-            feedforward -= (int16_t)ARC_ENTER_TURN_BIAS;
+            feedforward -= enterAssistBias;
         }
     } else {
         feedforward = (int16_t)ARC_CURVE_BIAS;
-         if (g_arcPhaseMs <=
+        if (g_arcPhaseMs <=
             ((uint32_t)ARC_LINE_ONLY_MS + (uint32_t)ARC_ENTER_ASSIST_MS)) {
-            feedforward += (int16_t)ARC_ENTER_TURN_BIAS;
+            feedforward += enterAssistBias;
         }
     }
 
@@ -615,22 +629,22 @@ static void app_task_on_turn_finished(void)
 
 void app_task_line_step(uint8_t pattern, float error, bool lineValid)
 {
-    bool ch123;
+    bool ch234;
     bool ch678;
     bool allOn;
 
     switch (g_line_state) {
         case LINE_STATE_STRAIGHT:
-            ch123 = line_ch123_all_on(pattern);
+            ch234 = line_ch234_all_on(pattern);
             ch678 = line_ch678_all_on(pattern);
             allOn = line_all_on(pattern);
 
             /* 八路全亮优先：停车/开环，避免速度环把空转当停转猛补 */
-            if (allOn || (ch123 && ch678)) {
+            if (allOn || (ch234 && ch678)) {
                 line_follow_all_on_or_cross(pattern, error, allOn);
-            } else if (ch123 && !ch678) {
+            } else if (ch234 && !ch678) {
                 line_turn_after_detect_delay(pattern, error, lineValid, true);
-            } else if (ch678 && !ch123) {
+            } else if (ch678 && !ch234) {
                 line_turn_after_detect_delay(pattern, error, lineValid, false);
             } else {
                 line_follow_drive(pattern, error, lineValid);

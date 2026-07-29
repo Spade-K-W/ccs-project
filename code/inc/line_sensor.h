@@ -29,8 +29,8 @@ bool line_calc_error_arc_f(uint8_t pattern, float *error);
 /* 判断当前红外模式是否像顶点/路口特征 */
 bool is_vertex_like_pattern(uint8_t pattern);
 
-/* 通道 1/2/3（bit0~2，偏左）是否同时压线 */
-bool line_ch123_all_on(uint8_t pattern);
+/* 通道 2/3/4（bit1~3，偏左）是否同时压线 */
+bool line_ch234_all_on(uint8_t pattern);
 
 /* 通道 6/7/8（bit5~7，偏右）是否同时压线 */
 bool line_ch678_all_on(uint8_t pattern);

@@ -1,7 +1,12 @@
 #ifndef PID_H
 #define PID_H
 
+#include <stdbool.h>
 #include <stdint.h>
+
+/* false=KEY1/KEY2默认参数，true=KEY3独立参数 */
+void pid_set_key3_profile(bool enabled);
+bool pid_is_key3_profile(void);
 
 void pid_line_reset(void);
 

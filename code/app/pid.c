@@ -31,6 +31,19 @@ static SpeedLoopState s_spdAvg = {0};
 static SpeedLoopState s_spdL   = {0};
 static SpeedLoopState s_spdR   = {0};
 static bool           s_turnLoopActive = false;
+static bool           s_key3Profile = false;
+
+void pid_set_key3_profile(bool enabled)
+{
+    s_key3Profile = enabled;
+    pid_line_reset();
+    pid_accel_reset();
+}
+
+bool pid_is_key3_profile(void)
+{
+    return s_key3Profile;
+}
 
 static int16_t pid_round_i16(float x)
 {
@@ -82,7 +95,10 @@ static float pid_filter_error(float error)
 
 static float pid_p_term(float filteredErr)
 {
-    return KP_LINE_STRAIGHT * filteredErr;
+    float kp = s_key3Profile
+        ? (float)KP_LINE_STRAIGHT_KEY3
+        : (float)KP_LINE_STRAIGHT;
+    return kp * filteredErr;
 }
 
 static float pid_d_term_error_rate(float filteredErr)
@@ -104,7 +120,9 @@ static float pid_d_term_error_rate(float filteredErr)
     dErr  = (filteredErr - s_lineErrPrev) / dtSec;
     s_lineErrPrev = filteredErr;
 
-    return (float)KD_LINE_STRAIGHT * dErr;
+    return (s_key3Profile
+            ? (float)KD_LINE_STRAIGHT_KEY3
+            : (float)KD_LINE_STRAIGHT) * dErr;
 }
 
 void pid_line_reset(void)
@@ -150,7 +168,9 @@ int16_t pid_line_arc_calc_diff(float error, float mirrorDir)
     s_arcErrFiltered = filteredErr;
 
     /* P：error>0（线偏右/CH678）→ 正差速 → 左快右慢 → 右转回线 */
-    pTerm = (float)KP_LINE_ARC * filteredErr;
+    pTerm = (s_key3Profile
+             ? (float)KP_LINE_ARC_KEY3
+             : (float)KP_LINE_ARC) * filteredErr;
 
     /* D：抑制抖动 */
     if (!s_arcDReady) {
@@ -161,7 +181,9 @@ int16_t pid_line_arc_calc_diff(float error, float mirrorDir)
         dtSec = (float)LOOP_PERIOD_MS / 1000.0f;
         if (dtSec > 0.0f) {
             dErr  = (filteredErr - s_arcErrPrev) / dtSec;
-            dTerm = (float)KD_LINE_ARC * dErr;
+            dTerm = (s_key3Profile
+                     ? (float)KD_LINE_ARC_KEY3
+                     : (float)KD_LINE_ARC) * dErr;
         } else {
             dTerm = 0.0f;
         }
@@ -170,7 +192,10 @@ int16_t pid_line_arc_calc_diff(float error, float mirrorDir)
 
     /* 陀螺角速度阻尼（可选） */
     gyroZ    = mpu6050_get_gyro_z_dps();
-    gyroTerm = -(float)KD_GYRO_ARC * (float)KD_GYRO_ARC_SIGN * gyroZ;
+    gyroTerm = -(s_key3Profile
+                 ? (float)KD_GYRO_ARC_KEY3
+                 : (float)KD_GYRO_ARC)
+               * (float)KD_GYRO_ARC_SIGN * gyroZ;
 
     diffF = pTerm + dTerm + gyroTerm;
     return pid_clamp_diff_arc(pid_round_i16(diffF));
@@ -267,7 +292,15 @@ static int16_t pid_speed_common_corr(int16_t cmdL, int16_t cmdR,
 
     meaAvg = 0.5f * (spdL + spdR) / PWM_TO_SPEED_GAIN;
     return pid_speed_one(&s_spdAvg, cmdAvg, meaAvg,
-                         KP_ACCEL_STRAIGHT, KI_ACCEL_STRAIGHT, KD_ACCEL_STRAIGHT,
+                         s_key3Profile
+                             ? KP_ACCEL_STRAIGHT_KEY3
+                             : KP_ACCEL_STRAIGHT,
+                         s_key3Profile
+                             ? KI_ACCEL_STRAIGHT_KEY3
+                             : KI_ACCEL_STRAIGHT,
+                         s_key3Profile
+                             ? KD_ACCEL_STRAIGHT_KEY3
+                             : KD_ACCEL_STRAIGHT,
                          ACCEL_INTEGRAL_MAX_STRAIGHT,
                          (int16_t)ACCEL_PWM_CORR_MAX_STRAIGHT);
 }
@@ -349,11 +382,27 @@ void pid_accel_apply_turn(int16_t *leftPwm, int16_t *rightPwm)
         : (cmdR < 0) ? -(int16_t)ACCEL_TURN_FF_BOOST : 0;
 
     corrL = pid_speed_one(&s_spdL, (float)cmdL, meaL,
-                          KP_ACCEL_TURN, KI_ACCEL_TURN, KD_ACCEL_TURN,
+                          s_key3Profile
+                              ? KP_ACCEL_TURN_KEY3
+                              : KP_ACCEL_TURN,
+                          s_key3Profile
+                              ? KI_ACCEL_TURN_KEY3
+                              : KI_ACCEL_TURN,
+                          s_key3Profile
+                              ? KD_ACCEL_TURN_KEY3
+                              : KD_ACCEL_TURN,
                           ACCEL_INTEGRAL_MAX_TURN,
                           (int16_t)ACCEL_PWM_CORR_MAX_TURN);
     corrR = pid_speed_one(&s_spdR, (float)cmdR, meaR,
-                          KP_ACCEL_TURN, KI_ACCEL_TURN, KD_ACCEL_TURN,
+                          s_key3Profile
+                              ? KP_ACCEL_TURN_KEY3
+                              : KP_ACCEL_TURN,
+                          s_key3Profile
+                              ? KI_ACCEL_TURN_KEY3
+                              : KI_ACCEL_TURN,
+                          s_key3Profile
+                              ? KD_ACCEL_TURN_KEY3
+                              : KD_ACCEL_TURN,
                           ACCEL_INTEGRAL_MAX_TURN,
                           (int16_t)ACCEL_PWM_CORR_MAX_TURN);
 

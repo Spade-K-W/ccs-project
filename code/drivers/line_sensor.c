@@ -163,12 +163,12 @@ bool is_vertex_like_pattern(uint8_t pattern)
 }
 
 /* 通道编号按模块 1~8：bit0=CH1 ... bit7=CH8 */
-#define LINE_MASK_CH123   (0x07U)  /* CH1|CH2|CH3 */
+#define LINE_MASK_CH234   (0x0EU)  /* CH2|CH3|CH4 */
 #define LINE_MASK_CH678   (0xE0U)  /* CH6|CH7|CH8 */
 
-bool line_ch123_all_on(uint8_t pattern)
+bool line_ch234_all_on(uint8_t pattern)
 {
-    return ((pattern & LINE_MASK_CH123) == LINE_MASK_CH123);
+    return ((pattern & LINE_MASK_CH234) == LINE_MASK_CH234);
 }
 
 bool line_ch678_all_on(uint8_t pattern)

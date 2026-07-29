@@ -58,6 +58,9 @@ void line_follow_drive(uint8_t pattern, float error, bool lineValid);
 /* 设置现有直线/弧线控制的速度比例：1~100，正常速度传 100 */
 void app_task_set_speed_percent(uint8_t percent);
 
+/* 控制循迹调试信息是否写入OLED；串口调试不受影响 */
+void app_task_set_oled_debug_enabled(bool enabled);
+
 /* 读取最近一次外环目标左右轮速度（未走速度环） */
 void line_follow_get_wheels(int16_t *left, int16_t *right);
 

@@ -137,6 +137,7 @@
 
 /* 直线段循迹比例系数（过大易蛇形抖动，建议 5~9） */
 #define KP_LINE_STRAIGHT            (6.5f)
+#define KP_LINE_STRAIGHT_KEY3       (3.0f)
 
 /* 直线误差死区：|error| 小于该值时不转向（可抑制感器微抖） */
 #define LINE_ERROR_DEADZONE         (0.50f)
@@ -146,6 +147,7 @@
 
 /* 线误差 D 项系数：D = KD × d(error)/dt（error 单位约 /s，建议 0.05~0.20） */
 #define KD_LINE_STRAIGHT            (0.04f)
+#define KD_LINE_STRAIGHT_KEY3       (0.02f)
 
 /* 陀螺仪航向辅助系数（无线直行锁航向，建议 0.3~1.2） */
 #define K_HEADING_STRAIGHT          (0.8f)
@@ -208,6 +210,9 @@
 #define KP_ACCEL_STRAIGHT           (0.30f)
 #define KI_ACCEL_STRAIGHT           (0.03f)
 #define KD_ACCEL_STRAIGHT           (0.00f)
+#define KP_ACCEL_STRAIGHT_KEY3      (0.30f)
+#define KI_ACCEL_STRAIGHT_KEY3      (0.03f)
+#define KD_ACCEL_STRAIGHT_KEY3      (0.00f)
 #define ACCEL_INTEGRAL_MAX_STRAIGHT (4.0f)
 #define ACCEL_PWM_CORR_MAX_STRAIGHT (3)
 
@@ -219,6 +224,9 @@
 #define KP_ACCEL_TURN               (0.40f)
 #define KI_ACCEL_TURN               (0.10f)
 #define KD_ACCEL_TURN               (0.00f)
+#define KP_ACCEL_TURN_KEY3          (0.40f)
+#define KI_ACCEL_TURN_KEY3          (0.10f)
+#define KD_ACCEL_TURN_KEY3          (0.00f)
 #define ACCEL_INTEGRAL_MAX_TURN     (10.0f)
 #define ACCEL_PWM_CORR_MAX_TURN     (10)
 
@@ -239,7 +247,7 @@
  * ========================================================= */
 
 /* --- 1) 速度 --- */
-#define BASE_SPEED_ARC              (25)  /* 共模略降，把余量留给差速 */
+#define BASE_SPEED_ARC              (30)  /* 共模略降，把余量留给差速 */
 /*
  * 线在正中时的弯道前馈差速（转不过就加大）：
  *   左弧 prepare(+1)：L=BASE-BIAS, R=BASE+BIAS
@@ -275,21 +283,26 @@
 #define LINE_WEIGHT_ARC_CH7         (2)
 #define LINE_WEIGHT_ARC_CH8         (3)
 
-#define KP_LINE_ARC                 (18.0f) /* 偏线时再加大拧弯 */
+#define KP_LINE_ARC                 (14.4f) /* 偏线时再加大拧弯 */
 #define KD_LINE_ARC                 (0.2f)
+#define KP_LINE_ARC_KEY3            (14.4f)
+#define KD_LINE_ARC_KEY3            (0.2f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
 #define KD_GYRO_ARC                 (0.00f)
+#define KD_GYRO_ARC_KEY3            (0.00f)
 #define KD_GYRO_ARC_SIGN            (1)
 #define ARC_DIFF_MAX                (100)  /* |steer| 总限幅；须 ≥ CURVE_BIAS+ENTER */
 
 #define ARC_ENTER_ASSIST_MS         (400U)
 #define ARC_ENTER_TURN_BIAS         (10)  /* 入弧再加拧，帮助咬住弯 */
+#define ARC_ENTER_TURN_BIAS_KEY3    (5)   /* KEY3低速入弧辅助，减小左轮瞬时增速 */
 /*
  * 进入弧线阶段后，先用普通红外巡线直行该时长；
  * 到时后才加入 ARC_CURVE_BIAS 和 ARC_ENTER_TURN_BIAS。
  */
-#define ARC_LINE_ONLY_MS             (1000U)
+#define ARC_LINE_ONLY_MS             (0U)
+
 /* --- 3) Straight ↔ Arc --- */
 #define LINE_DETECT_HOLD_CNT        (3U)
 #define LINE_LOST_HOLD_CNT          (8U)
@@ -339,7 +352,7 @@
  * MPU6050 量程与校准 / 积分净化
  * ========================================================= */
 #define MPU_GYRO_SENS_500DPS        (65.5f)
-#define MPU_CALIB_SAMPLES           (400U)   /* 静止标定点数（约 400×8ms≈3.2s） */
+#define MPU_CALIB_SAMPLES           (300U)   /* 静止标定点数（约 400×8ms≈3.2s） */
 #define MPU_CALIB_TRIM_EACH         (20U)    /* 去掉两端极值各 N 点 */
 
 /* 积分前低通：filt = α·new + (1-α)·old；α 越大越跟手、越小越稳 */

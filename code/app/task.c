@@ -1,4 +1,5 @@
 #include "task.h"
+#include "app_config.h"
 #include "key.h"
 #include "app_task.h"
 #include "encoder.h"
@@ -7,6 +8,7 @@
 #include "mpu6050.h"
 #include "number.h"
 #include "oled.h"
+#include "pid.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -23,24 +25,27 @@
  */
 
 /* 红外传感器判断参数 */
-#define TURN_PATTERN_CONFIRM_CNT         (3U)      /* 转弯特征确认帧数 */
-#define TURN_PATTERN_CONFIRM_TIMEOUT_MS  (500U)    /* 特征确认超时 */
 #define LINE_LOST_CONFIRM_CNT            (5U)      /* 丢线确认帧数 */
 
 /* 陀螺仪参数 */
 #define TASK_ARC_YAW_DEG                 (180.0f)  /* 弧线转弯180度 */
 #define TASK_KEY1_TARGET_YAW_DEG         (340.0f)  /* KEY1一圈的目标角度 */
+#define TASK_KEY3_TARGET_YAW_DEG         (340.0f)  /* KEY3一圈的目标角度 */
 
 /* 编码器保护参数 */
-#define TASK_STRAIGHT_DISTANCE_MAX_CM    (200.0f)  /* 直线段编码器保护上限 */
-#define TASK_ARC_PREP_DISTANCE_CM        (120.0f)  /* 提前进弧线的编码器阈值 */
+#define TASK_STRAIGHT_DISTANCE_MAX_CM    (220.0f)  /* 直线段编码器保护上限 */
+#define TASK_AB_TURN_ARM_DISTANCE_CM     (90.0f)   /* AB前90cm禁止累计转弯红外特征 */
+#define TASK_CD_TURN_ARM_DISTANCE_CM     (60.0f)   /* CD前60cm禁止累计转弯红外特征 */
+#define TASK_AB_ARC_PREP_DISTANCE_CM     (220.0f)  /* AB→BC编码器保护阈值 */
+#define TASK_CD_SLOWDOWN_DISTANCE_CM     (125.0f)  /* CD末段开始降速 */
+#define TASK_CD_ARC_PREP_DISTANCE_CM     (170.0f)  /* CD→DA编码器保护阈值 */
 
 /* 速度参数 */
 #define TASK_NORMAL_SPEED_PERCENT        (100U)
-#define TASK_SLOW_SPEED_PERCENT          (60U)
+#define TASK_SLOW_SPEED_PERCENT          (70U)
+#define TASK_CD_SPEED_REDUCTION          (5U)
 
 /* 显示参数 */
-#define TASK_KEY_NOTICE_MS               (2000U)
 #define TASK_DISPLAY_PERIOD_MS           (100U)
 
 /* app_task.c 约定：+1 为左弧，-1 为右弧；顺时针使用右弧。 */
@@ -84,9 +89,17 @@ static float g_phase_start_yaw_deg = 0.0f;
 static float g_distance_base_cm = 0.0f;
 
 /* 红外特征检测相关 */
-static uint8_t g_right_turn_pattern_cnt = 0U;      /* 右转特征连续检测计数 */
-static uint32_t g_right_turn_last_detect_ms = 0U;  /* 上次检测到右转的时间 */
+static uint8_t g_turn_pattern_frame_0 = 0U;        /* 当前帧目标通道 */
+static uint8_t g_turn_pattern_frame_1 = 0U;        /* 前1帧目标通道 */
+static uint8_t g_turn_pattern_frame_2 = 0U;        /* 前2帧目标通道 */
+static uint8_t g_turn_pattern_frame_3 = 0U;        /* 前3帧目标通道 */
+static uint8_t g_turn_pattern_frame_4 = 0U;        /* 前4帧目标通道 */
+static uint8_t g_turn_pattern_frame_5 = 0U;        /* 前5帧目标通道 */
+static uint8_t g_turn_pattern_frame_6 = 0U;        /* 前6帧目标通道 */
 static uint8_t g_line_lost_cnt = 0U;                /* 丢线连续计数 */
+static bool g_cd_slowdown_applied = false;
+static uint8_t g_ab_bc_switch_source = 0U;          /* 1=红外，2=编码器保护 */
+static uint8_t g_cd_da_switch_source = 0U;          /* 1=红外，2=编码器保护 */
 
 /* 辅助函数 */
 static float abs_f(float value)
@@ -101,9 +114,48 @@ static float task_segment_distance_cm(void)
     return abs_f(distance);
 }
 
-static float task_total_distance_cm(void)
+static uint8_t task_normal_speed_percent(void)
 {
-    return g_distance_base_cm + task_segment_distance_cm();
+    return (g_task_state == TASK_KEY3_SLOW_LAP)
+        ? TASK_SLOW_SPEED_PERCENT
+        : TASK_NORMAL_SPEED_PERCENT;
+}
+
+static uint8_t task_cd_slow_speed_percent(void)
+{
+    uint32_t normal_percent = task_normal_speed_percent();
+    uint32_t normal_speed =
+        ((uint32_t)BASE_SPEED_STRAIGHT * normal_percent) / 100U;
+    uint32_t target_speed;
+    uint32_t target_percent;
+
+    if (normal_speed > TASK_CD_SPEED_REDUCTION) {
+        target_speed = normal_speed - TASK_CD_SPEED_REDUCTION;
+    } else {
+        target_speed = 1U;
+    }
+
+    target_percent =
+        ((target_speed * 100U) + (uint32_t)BASE_SPEED_STRAIGHT - 1U)
+        / (uint32_t)BASE_SPEED_STRAIGHT;
+
+    if (target_percent < 1U) {
+        target_percent = 1U;
+    } else if (target_percent > 100U) {
+        target_percent = 100U;
+    }
+
+    return (uint8_t)target_percent;
+}
+
+static void task_apply_cd_slowdown(void)
+{
+    if (!g_cd_slowdown_applied) {
+        if (g_task_state != TASK_KEY3_SLOW_LAP) {
+            app_task_set_speed_percent(task_cd_slow_speed_percent());
+        }
+        g_cd_slowdown_applied = true;
+    }
 }
 
 static float task_phase_yaw_deg(void)
@@ -129,12 +181,15 @@ static void task_update_yaw(void)
 
 /* ========== 红外特征检测逻辑（核心改进） ========== */
 
-/**
- * 检测右转特征：CH1/CH2/CH3 全亮（黑线在左，即将右转）
- */
-static bool detect_right_turn_feature(uint8_t pattern)
+static void reset_right_turn_detect(void)
 {
-    return line_ch123_all_on(pattern);
+    g_turn_pattern_frame_0 = 0U;
+    g_turn_pattern_frame_1 = 0U;
+    g_turn_pattern_frame_2 = 0U;
+    g_turn_pattern_frame_3 = 0U;
+    g_turn_pattern_frame_4 = 0U;
+    g_turn_pattern_frame_5 = 0U;
+    g_turn_pattern_frame_6 = 0U;
 }
 
 /**
@@ -153,35 +208,34 @@ static bool detect_line_lost(uint8_t pattern)
     return (pattern == 0U);
 }
 
-/**
- * 处理右转特征确认（多帧确认防止抖动）
- * 返回 true 表示已确认转弯
+/*
+ * 最近七帧滚动累计目标通道：
+ * AB→BC和CD→DA都要求最近七帧合计覆盖CH567。
  */
 static bool process_right_turn_detect(uint8_t pattern)
 {
-    uint32_t now_ms = motor_millis();
+    const uint8_t required_mask = (uint8_t)0x70U; /* CH5 | CH6 | CH7 */
+    uint8_t accumulated;
 
-    if (detect_right_turn_feature(pattern)) {
-        /* 继续检测右转特征 */
-        if (g_right_turn_pattern_cnt == 0U) {
-            g_right_turn_last_detect_ms = now_ms;
-        }
-        g_right_turn_pattern_cnt++;
-        
-        /* 连续确认达到阈值 */
-        if (g_right_turn_pattern_cnt >= TURN_PATTERN_CONFIRM_CNT) {
-            g_right_turn_pattern_cnt = 0U;
-            return true;
-        }
-    } else {
-        /* 未检测到或中断，检查是否超时 */
-        if (g_right_turn_pattern_cnt > 0U) {
-            if ((now_ms - g_right_turn_last_detect_ms) 
-                > TURN_PATTERN_CONFIRM_TIMEOUT_MS) {
-                /* 超时，清零计数 */
-                g_right_turn_pattern_cnt = 0U;
-            }
-        }
+    g_turn_pattern_frame_6 = g_turn_pattern_frame_5;
+    g_turn_pattern_frame_5 = g_turn_pattern_frame_4;
+    g_turn_pattern_frame_4 = g_turn_pattern_frame_3;
+    g_turn_pattern_frame_3 = g_turn_pattern_frame_2;
+    g_turn_pattern_frame_2 = g_turn_pattern_frame_1;
+    g_turn_pattern_frame_1 = g_turn_pattern_frame_0;
+    g_turn_pattern_frame_0 = (uint8_t)(pattern & required_mask);
+
+    accumulated = (uint8_t)(g_turn_pattern_frame_0
+                  | g_turn_pattern_frame_1
+                  | g_turn_pattern_frame_2
+                  | g_turn_pattern_frame_3
+                  | g_turn_pattern_frame_4
+                  | g_turn_pattern_frame_5
+                  | g_turn_pattern_frame_6);
+
+    if ((accumulated & required_mask) == required_mask) {
+        reset_right_turn_detect();
+        return true;
     }
 
     return false;
@@ -193,14 +247,40 @@ static bool process_right_turn_detect(uint8_t pattern)
  */
 static bool should_enter_arc_straight_to_arc(uint8_t pattern)
 {
-    /* 第1优先级：红外特征检测 */
+    float distance;
+    float arm_distance;
+
+    distance = task_segment_distance_cm();
+    arm_distance = (g_route_phase == ROUTE_CD_STRAIGHT)
+        ? TASK_CD_TURN_ARM_DISTANCE_CM
+        : TASK_AB_TURN_ARM_DISTANCE_CM;
+
+    /* 当前直线路段到达各自解锁距离前不累计红外转弯特征。 */
+    if (distance < arm_distance) {
+        reset_right_turn_detect();
+        return false;
+    }
+
+    /* 最近七帧累计覆盖当前路段要求的三个通道时进入弧线。 */
     if (process_right_turn_detect(pattern)) {
+        if (g_route_phase == ROUTE_AB_STRAIGHT) {
+            g_ab_bc_switch_source = 1U;
+        } else if (g_route_phase == ROUTE_CD_STRAIGHT) {
+            g_cd_da_switch_source = 1U;
+        }
         return true;
     }
 
-    /* 第2优先级：编码器保护（防止红外失效） */
-    float distance = task_segment_distance_cm();
-    if (distance >= TASK_ARC_PREP_DISTANCE_CM) {
+    /* 编码器仅作红外检测失效时的距离保护。 */
+    if ((g_route_phase == ROUTE_AB_STRAIGHT)
+        && (distance >= TASK_AB_ARC_PREP_DISTANCE_CM)) {
+        g_ab_bc_switch_source = 2U;
+        return true;
+    }
+
+    if ((g_route_phase == ROUTE_CD_STRAIGHT)
+        && (distance >= TASK_CD_ARC_PREP_DISTANCE_CM)) {
+        g_cd_da_switch_source = 2U;
         return true;
     }
 
@@ -236,36 +316,6 @@ static bool should_stop_at_B_point(uint8_t pattern)
 
 /* ========== UI显示 ========== */
 
-static const char *task_key_text(void)
-{
-    switch (g_task_state) {
-    case TASK_KEY1_ONE_LAP:
-        return "KEY1 ONE LAP";
-    case TASK_KEY2_A_TO_B:
-        return "KEY2 A TO B";
-    case TASK_KEY3_SLOW_LAP:
-        return "KEY3 SLOW LAP";
-    default:
-        return "";
-    }
-}
-
-static const char *route_phase_text(void)
-{
-    switch (g_route_phase) {
-    case ROUTE_AB_STRAIGHT:
-        return "AB";
-    case ROUTE_BC_ARC:
-        return "BC";
-    case ROUTE_CD_STRAIGHT:
-        return "CD";
-    case ROUTE_DA_ARC:
-        return "DA";
-    default:
-        return "--";
-    }
-}
-
 static uint32_t task_timeout_ms(void)
 {
     switch (g_task_state) {
@@ -280,43 +330,34 @@ static uint32_t task_timeout_ms(void)
     }
 }
 
+static void task_show_switch_sources(void)
+{
+    char line[22];
+
+    snprintf(line, sizeof(line), "AB:%u                 ",
+             (unsigned int)g_ab_bc_switch_source);
+    oled_display_string(0U, 0U, line);
+
+    snprintf(line, sizeof(line), "CD:%u                 ",
+             (unsigned int)g_cd_da_switch_source);
+    oled_display_string(1U, 0U, line);
+}
+
 static void task_show_select(void)
 {
     number_show_time_ms(0U);
     oled_clear();
-    oled_display_string(0U, 0U, "Select task");
-    oled_display_string(2U, 0U, "KEY1 One lap");
-    oled_display_string(4U, 0U, "KEY2 A to B");
-    oled_display_string(6U, 0U, "KEY3 Slow lap");
+    task_show_switch_sources();
 }
 
 static void task_show_running(void)
 {
-    char line[22];
-    uint8_t pattern = line_read_pattern();
-
     if ((g_task_elapsed_ms - g_display_last_ms)
         < TASK_DISPLAY_PERIOD_MS) {
         return;
     }
     g_display_last_ms = g_task_elapsed_ms;
-
-    /* 第1行：任务名称/路段 */
-    if (g_task_elapsed_ms < TASK_KEY_NOTICE_MS) {
-        snprintf(line, sizeof(line), "%-21s", task_key_text());
-    } else {
-        snprintf(line, sizeof(line), "%s Y:%+6.1f D:%4.0f",
-                 route_phase_text(), g_yaw_accum_deg,
-                 task_total_distance_cm());
-    }
-    oled_display_string(6U, 0U, line);
-
-    /* 第2行：时间 + 红外模式 */
-    snprintf(line, sizeof(line), "T:%lu.%03lu P:%02X    ",
-             (unsigned long)(g_task_elapsed_ms / 1000U),
-             (unsigned long)(g_task_elapsed_ms % 1000U),
-             pattern);
-    oled_display_string(7U, 0U, line);
+    task_show_switch_sources();
 }
 
 /* ========== 状态机 ========== */
@@ -329,8 +370,13 @@ static void task_enter_phase(RoutePhase next)
     g_phase_start_yaw_deg = g_yaw_accum_deg;
 
     /* 重置红外检测计数 */
-    g_right_turn_pattern_cnt = 0U;
+    reset_right_turn_detect();
     g_line_lost_cnt = 0U;
+
+    if (next == ROUTE_DA_ARC) {
+        /* 红外提前触发DA时，也必须先应用CD末段降速。 */
+        task_apply_cd_slowdown();
+    }
 
     if ((next == ROUTE_AB_STRAIGHT)
         || (next == ROUTE_CD_STRAIGHT)) {
@@ -363,57 +409,31 @@ static void task_start(TaskState state)
     g_distance_base_cm = 0.0f;
 
     /* 重置红外检测 */
-    g_right_turn_pattern_cnt = 0U;
+    reset_right_turn_detect();
     g_line_lost_cnt = 0U;
+    g_cd_slowdown_applied = false;
+    g_ab_bc_switch_source = 0U;
+    g_cd_da_switch_source = 0U;
 
+    pid_set_key3_profile(state == TASK_KEY3_SLOW_LAP);
     app_task_set_speed_percent(speed_percent);
     app_task_straight_prepare(0.0f);
 
     oled_clear();
     number_show_time_ms(0U);
-
-    oled_display_string(6U, 0U, task_key_text());
-    oled_display_string(7U, 0U, "T:0.000s");
+    task_show_switch_sources();
 }
 
 static void task_finish(FinishReason reason)
 {
-    char line[22];
-    const char *name = task_key_text();
-    const char *result;
-
-    switch (reason) {
-    case FINISH_SUCCESS:
-        result = "TASK FINISHED";
-        break;
-    case FINISH_TIMEOUT:
-        result = "TASK TIMEOUT";
-        break;
-    default:
-        result = "TASK CANCELLED";
-        break;
-    }
+    (void)reason;
 
     chassis_stop();
     number_show_time_ms(g_task_elapsed_ms);
     g_task_state = TASK_FINISHED;
 
     oled_clear();
-    oled_display_string(0U, 0U, result);
-    oled_display_string(1U, 0U, name);
-
-    snprintf(line, sizeof(line), "TIME:%lu.%03lus",
-             (unsigned long)(g_task_elapsed_ms / 1000U),
-             (unsigned long)(g_task_elapsed_ms % 1000U));
-    oled_display_string(3U, 0U, line);
-
-    snprintf(line, sizeof(line), "YAW:%+7.1f deg", g_yaw_accum_deg);
-    oled_display_string(5U, 0U, line);
-
-    snprintf(line, sizeof(line), "DIST:%6.1f cm",
-             task_total_distance_cm());
-    oled_display_string(6U, 0U, line);
-    oled_display_string(7U, 0U, "Press next key");
+    task_show_switch_sources();
 }
 
 /* ========== 核心路线执行逻辑 ========== */
@@ -464,6 +484,10 @@ static void task_run_route(void)
 
     case ROUTE_CD_STRAIGHT:
         /* 直线阶段：红外特征优先，编码器保护 */
+        if (task_segment_distance_cm() >= TASK_CD_SLOWDOWN_DISTANCE_CM) {
+            task_apply_cd_slowdown();
+        }
+
         if (should_enter_arc_straight_to_arc(pattern)) {
             task_enter_phase(ROUTE_DA_ARC);
             return;
@@ -480,14 +504,14 @@ static void task_run_route(void)
     case ROUTE_DA_ARC:
         /* 弧线阶段：用陀螺仪判断转弯完成 */
         if (g_task_state == TASK_KEY1_ONE_LAP) {
-            /* KEY1：整圈模式，目标角度340度 */
+            /* KEY1：累计转角达到340度后立即停车 */
             if (abs_f(g_yaw_accum_deg) >= TASK_KEY1_TARGET_YAW_DEG) {
                 task_finish(FINISH_SUCCESS);
                 return;
             }
         } else {
-            /* KEY3：标准180度转弯 */
-            if (task_phase_yaw_deg() >= TASK_ARC_YAW_DEG) {
+            /* KEY3：累计转角达到340度后立即停车 */
+            if (abs_f(g_yaw_accum_deg) >= TASK_KEY3_TARGET_YAW_DEG) {
                 task_finish(FINISH_SUCCESS);
                 return;
             }
@@ -520,10 +544,13 @@ void task_init(void)
     g_yaw_accum_deg = 0.0f;
     g_phase_start_yaw_deg = 0.0f;
     g_distance_base_cm = 0.0f;
-    g_right_turn_pattern_cnt = 0U;
+    reset_right_turn_detect();
     g_line_lost_cnt = 0U;
+    g_ab_bc_switch_source = 0U;
+    g_cd_da_switch_source = 0U;
 
     chassis_stop();
+    app_task_set_oled_debug_enabled(false);
     task_show_select();
 }
 
