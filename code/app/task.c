@@ -13,33 +13,38 @@
 #include <stdio.h>
 
 /*
- * 连续黑色环线的路线状态：
- *   A→B：红外直线循迹 150 cm
- *   B→C：红外右弧循迹 180°
- *   C→D：红外直线循迹 150 cm
- *   D→A：红外右弧循迹 180°
+ * 改进的路线状态机：红外传感器作为主要判断，编码器仅作保护
+ *   A→B：红外循迹，检测到右转特征→进入弧线
+ *   B→C：红外弧线，陀螺仪判断180°完成
+ *   C→D：红外循迹，检测到右转特征→进入弧线
+ *   D→A：红外弧线，陀螺仪判断180°完成
  *
- * 不再把“看见黑线/丢失黑线”作为直线与弧线的切换条件。
+ * 编码器作为保护：防止红外失效时卡死
  */
-#define TASK_STRAIGHT_DISTANCE_CM    (160.0f)
-#define TASK_ARC_YAW_DEG             (180.0f)
-/*
- * 提前进入弧线准备：随后由 line_follow_arc() 普通巡线 1 秒，
- * 再启用强制右转。慢速模式一秒走得更短，所以切换点更靠后。
- */
-#define TASK_ARC_PREP_NORMAL_CM      (125.0f)
-#define TASK_ARC_PREP_SLOW_CM        (132.0f)
-#define TASK_NORMAL_SPEED_PERCENT    (100U)
-#define TASK_SLOW_SPEED_PERCENT      (60U)
-#define TASK_KEY_NOTICE_MS           (2000U)
-#define TASK_DISPLAY_PERIOD_MS       (100U)
 
-#define TASK_KEY1_TARGET_YAW_DEG     (340.0f)
-#define TASK_KEY2_TIMEOUT_MS         (8000U)
-#define TASK_KEY3_TIMEOUT_MS         (30000U)
+/* 红外传感器判断参数 */
+#define TURN_PATTERN_CONFIRM_CNT         (3U)      /* 转弯特征确认帧数 */
+#define TURN_PATTERN_CONFIRM_TIMEOUT_MS  (500U)    /* 特征确认超时 */
+#define LINE_LOST_CONFIRM_CNT            (5U)      /* 丢线确认帧数 */
+
+/* 陀螺仪参数 */
+#define TASK_ARC_YAW_DEG                 (180.0f)  /* 弧线转弯180度 */
+#define TASK_KEY1_TARGET_YAW_DEG         (340.0f)  /* KEY1一圈的目标角度 */
+
+/* 编码器保护参数 */
+#define TASK_STRAIGHT_DISTANCE_MAX_CM    (200.0f)  /* 直线段编码器保护上限 */
+#define TASK_ARC_PREP_DISTANCE_CM        (120.0f)  /* 提前进弧线的编码器阈值 */
+
+/* 速度参数 */
+#define TASK_NORMAL_SPEED_PERCENT        (100U)
+#define TASK_SLOW_SPEED_PERCENT          (60U)
+
+/* 显示参数 */
+#define TASK_KEY_NOTICE_MS               (2000U)
+#define TASK_DISPLAY_PERIOD_MS           (100U)
 
 /* app_task.c 约定：+1 为左弧，-1 为右弧；顺时针使用右弧。 */
-#define TASK_ARC_MIRROR_DIR          (-1.0f)
+#define TASK_ARC_MIRROR_DIR              (-1.0f)
 
 typedef enum {
     TASK_IDLE = 0,
@@ -62,6 +67,7 @@ typedef enum {
     FINISH_CANCELLED
 } FinishReason;
 
+/* 状态变量 */
 static TaskState  g_task_state = TASK_IDLE;
 static RoutePhase g_route_phase = ROUTE_AB_STRAIGHT;
 
@@ -69,17 +75,20 @@ static uint32_t g_task_start_ms = 0U;
 static uint32_t g_task_elapsed_ms = 0U;
 static uint32_t g_display_last_ms = 0U;
 
-/* MPU 当前角度会在 ±180°回绕；这里保存解回绕后的整段累计角度。 */
+/* 陀螺仪相关 */
 static float g_yaw_last_deg = 0.0f;
 static float g_yaw_accum_deg = 0.0f;
 static float g_phase_start_yaw_deg = 0.0f;
 
-/*
- * 每次直线/弧线 prepare 都会清编码器。
- * 已完成路段距离放在 base 中，当前路段直接读取复位后的编码器。
- */
+/* 编码器相关 */
 static float g_distance_base_cm = 0.0f;
 
+/* 红外特征检测相关 */
+static uint8_t g_right_turn_pattern_cnt = 0U;      /* 右转特征连续检测计数 */
+static uint32_t g_right_turn_last_detect_ms = 0U;  /* 上次检测到右转的时间 */
+static uint8_t g_line_lost_cnt = 0U;                /* 丢线连续计数 */
+
+/* 辅助函数 */
 static float abs_f(float value)
 {
     return (value >= 0.0f) ? value : -value;
@@ -89,7 +98,6 @@ static float task_segment_distance_cm(void)
 {
     float distance = encoder_pulses_to_cm(
         (float)encoder_get_vehicle_pos_pulses());
-
     return abs_f(distance);
 }
 
@@ -103,6 +111,7 @@ static float task_phase_yaw_deg(void)
     return abs_f(g_yaw_accum_deg - g_phase_start_yaw_deg);
 }
 
+/* 陀螺仪更新 */
 static void task_update_yaw(void)
 {
     float now = mpu6050_get_z_angle_deg();
@@ -117,6 +126,115 @@ static void task_update_yaw(void)
     g_yaw_accum_deg += delta;
     g_yaw_last_deg = now;
 }
+
+/* ========== 红外特征检测逻辑（核心改进） ========== */
+
+/**
+ * 检测右转特征：CH1/CH2/CH3 全亮（黑线在左，即将右转）
+ */
+static bool detect_right_turn_feature(uint8_t pattern)
+{
+    return line_ch123_all_on(pattern);
+}
+
+/**
+ * 检测左转特征：CH6/CH7/CH8 全亮（黑线在右，即将左转）
+ */
+static bool detect_left_turn_feature(uint8_t pattern)
+{
+    return line_ch678_all_on(pattern);
+}
+
+/**
+ * 检测丢线
+ */
+static bool detect_line_lost(uint8_t pattern)
+{
+    return (pattern == 0U);
+}
+
+/**
+ * 处理右转特征确认（多帧确认防止抖动）
+ * 返回 true 表示已确认转弯
+ */
+static bool process_right_turn_detect(uint8_t pattern)
+{
+    uint32_t now_ms = motor_millis();
+
+    if (detect_right_turn_feature(pattern)) {
+        /* 继续检测右转特征 */
+        if (g_right_turn_pattern_cnt == 0U) {
+            g_right_turn_last_detect_ms = now_ms;
+        }
+        g_right_turn_pattern_cnt++;
+        
+        /* 连续确认达到阈值 */
+        if (g_right_turn_pattern_cnt >= TURN_PATTERN_CONFIRM_CNT) {
+            g_right_turn_pattern_cnt = 0U;
+            return true;
+        }
+    } else {
+        /* 未检测到或中断，检查是否超时 */
+        if (g_right_turn_pattern_cnt > 0U) {
+            if ((now_ms - g_right_turn_last_detect_ms) 
+                > TURN_PATTERN_CONFIRM_TIMEOUT_MS) {
+                /* 超时，清零计数 */
+                g_right_turn_pattern_cnt = 0U;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * 主要判断函数：是否应该进入弧线阶段
+ * 优先级：红外特征 > 编码器保护
+ */
+static bool should_enter_arc_straight_to_arc(uint8_t pattern)
+{
+    /* 第1优先级：红外特征检测 */
+    if (process_right_turn_detect(pattern)) {
+        return true;
+    }
+
+    /* 第2优先级：编码器保护（防止红外失效） */
+    float distance = task_segment_distance_cm();
+    if (distance >= TASK_ARC_PREP_DISTANCE_CM) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * 主要判断函数：是否应该停止（仅用于KEY2 A→B）
+ * 在直线段检测到停止线特征
+ */
+static bool should_stop_at_B_point(uint8_t pattern)
+{
+    /* 检测十字路口或两侧都有传感器 */
+    uint8_t cnt = 0;
+    uint8_t i;
+    for (i = 0; i < 8; i++) {
+        if (pattern & (1U << i)) cnt++;
+    }
+
+    /* 编码器保护：防止过度运行 */
+    float distance = task_segment_distance_cm();
+    if (distance >= TASK_STRAIGHT_DISTANCE_MAX_CM) {
+        return true;
+    }
+
+    /* 红外判断：检测到明显的路口特征 */
+    if (is_vertex_like_pattern(pattern) && (cnt >= 6U)) {
+        return true;
+    }
+
+    return false;
+}
+
+/* ========== UI显示 ========== */
 
 static const char *task_key_text(void)
 {
@@ -152,12 +270,11 @@ static uint32_t task_timeout_ms(void)
 {
     switch (g_task_state) {
     case TASK_KEY1_ONE_LAP:
-        /* KEY1 stops by accumulated MPU yaw, not by elapsed time. */
-        return 0U;
+        return 30000U;  /* 30秒 */
     case TASK_KEY2_A_TO_B:
-        return TASK_KEY2_TIMEOUT_MS;
+        return 8000U;   /* 8秒 */
     case TASK_KEY3_SLOW_LAP:
-        return TASK_KEY3_TIMEOUT_MS;
+        return 40000U;  /* 40秒 */
     default:
         return 0U;
     }
@@ -176,6 +293,7 @@ static void task_show_select(void)
 static void task_show_running(void)
 {
     char line[22];
+    uint8_t pattern = line_read_pattern();
 
     if ((g_task_elapsed_ms - g_display_last_ms)
         < TASK_DISPLAY_PERIOD_MS) {
@@ -183,6 +301,7 @@ static void task_show_running(void)
     }
     g_display_last_ms = g_task_elapsed_ms;
 
+    /* 第1行：任务名称/路段 */
     if (g_task_elapsed_ms < TASK_KEY_NOTICE_MS) {
         snprintf(line, sizeof(line), "%-21s", task_key_text());
     } else {
@@ -192,46 +311,26 @@ static void task_show_running(void)
     }
     oled_display_string(6U, 0U, line);
 
-    snprintf(line, sizeof(line), "T:%lu.%03lus          ",
+    /* 第2行：时间 + 红外模式 */
+    snprintf(line, sizeof(line), "T:%lu.%03lu P:%02X    ",
              (unsigned long)(g_task_elapsed_ms / 1000U),
-             (unsigned long)(g_task_elapsed_ms % 1000U));
+             (unsigned long)(g_task_elapsed_ms % 1000U),
+             pattern);
     oled_display_string(7U, 0U, line);
 }
 
-static float task_arc_prep_distance_cm(void)
-{
-    return (g_task_state == TASK_KEY3_SLOW_LAP)
-        ? TASK_ARC_PREP_SLOW_CM
-        : TASK_ARC_PREP_NORMAL_CM;
-}
-
-static void task_drive_straight(void)
-{
-    uint8_t pattern = line_read_pattern();
-    float error = 0.0f;
-    bool line_valid = line_calc_error_f(pattern, &error);
-
-    line_follow_drive(pattern, error, line_valid);
-}
-
-static void task_drive_arc(void)
-{
-    uint8_t pattern = line_read_pattern();
-    float error = 0.0f;
-    bool line_valid = line_calc_error_arc_f(pattern, &error);
-
-    app_task_arc_step(pattern, error, line_valid);
-}
+/* ========== 状态机 ========== */
 
 static void task_enter_phase(RoutePhase next)
 {
-    /*
-     * prepare 会清编码器；先保存刚完成路段的实际编码器距离。
-     * 初始相位不走本函数，因此不会重复累计。
-     */
+    /* 保存刚完成路段的编码器距离 */
     g_distance_base_cm += task_segment_distance_cm();
     g_route_phase = next;
     g_phase_start_yaw_deg = g_yaw_accum_deg;
+
+    /* 重置红外检测计数 */
+    g_right_turn_pattern_cnt = 0U;
+    g_line_lost_cnt = 0U;
 
     if ((next == ROUTE_AB_STRAIGHT)
         || (next == ROUTE_CD_STRAIGHT)) {
@@ -262,6 +361,10 @@ static void task_start(TaskState state)
     g_yaw_accum_deg = 0.0f;
     g_phase_start_yaw_deg = 0.0f;
     g_distance_base_cm = 0.0f;
+
+    /* 重置红外检测 */
+    g_right_turn_pattern_cnt = 0U;
+    g_line_lost_cnt = 0U;
 
     app_task_set_speed_percent(speed_percent);
     app_task_straight_prepare(0.0f);
@@ -313,53 +416,89 @@ static void task_finish(FinishReason reason)
     oled_display_string(7U, 0U, "Press next key");
 }
 
+/* ========== 核心路线执行逻辑 ========== */
+
 static void task_run_route(void)
 {
-    float distance;
+    uint8_t pattern = line_read_pattern();
 
     switch (g_route_phase) {
     case ROUTE_AB_STRAIGHT:
-        distance = task_segment_distance_cm();
+        /* 直线阶段：红外特征优先，编码器保护 */
         if (g_task_state == TASK_KEY2_A_TO_B) {
-            if (distance >= TASK_STRAIGHT_DISTANCE_CM) {
+            /* KEY2：直到检测到B点停止线 */
+            if (should_stop_at_B_point(pattern)) {
                 task_finish(FINISH_SUCCESS);
                 return;
             }
         } else {
-            if (distance >= task_arc_prep_distance_cm()) {
+            /* KEY1/KEY3：检测到右转特征则进入弧线 */
+            if (should_enter_arc_straight_to_arc(pattern)) {
                 task_enter_phase(ROUTE_BC_ARC);
                 return;
             }
         }
-        task_drive_straight();
+        
+        /* 执行直线循迹 */
+        {
+            float error = 0.0f;
+            bool line_valid = line_calc_error_f(pattern, &error);
+            line_follow_drive(pattern, error, line_valid);
+        }
         break;
 
     case ROUTE_BC_ARC:
+        /* 弧线阶段：用陀螺仪判断转弯完成 */
         if (task_phase_yaw_deg() >= TASK_ARC_YAW_DEG) {
             task_enter_phase(ROUTE_CD_STRAIGHT);
             return;
         }
-        task_drive_arc();
+        
+        /* 执行弧线循迹 */
+        {
+            float error = 0.0f;
+            bool line_valid = line_calc_error_arc_f(pattern, &error);
+            app_task_arc_step(pattern, error, line_valid);
+        }
         break;
 
     case ROUTE_CD_STRAIGHT:
-        distance = task_segment_distance_cm();
-        if (distance >= task_arc_prep_distance_cm()) {
+        /* 直线阶段：红外特征优先，编码器保护 */
+        if (should_enter_arc_straight_to_arc(pattern)) {
             task_enter_phase(ROUTE_DA_ARC);
             return;
         }
-        task_drive_straight();
+        
+        /* 执行直线循迹 */
+        {
+            float error = 0.0f;
+            bool line_valid = line_calc_error_f(pattern, &error);
+            line_follow_drive(pattern, error, line_valid);
+        }
         break;
 
     case ROUTE_DA_ARC:
-        if (((g_task_state == TASK_KEY1_ONE_LAP)
-             && (abs_f(g_yaw_accum_deg) >= TASK_KEY1_TARGET_YAW_DEG))
-            || ((g_task_state != TASK_KEY1_ONE_LAP)
-                && (task_phase_yaw_deg() >= TASK_ARC_YAW_DEG))) {
-            task_finish(FINISH_SUCCESS);
-            return;
+        /* 弧线阶段：用陀螺仪判断转弯完成 */
+        if (g_task_state == TASK_KEY1_ONE_LAP) {
+            /* KEY1：整圈模式，目标角度340度 */
+            if (abs_f(g_yaw_accum_deg) >= TASK_KEY1_TARGET_YAW_DEG) {
+                task_finish(FINISH_SUCCESS);
+                return;
+            }
+        } else {
+            /* KEY3：标准180度转弯 */
+            if (task_phase_yaw_deg() >= TASK_ARC_YAW_DEG) {
+                task_finish(FINISH_SUCCESS);
+                return;
+            }
         }
-        task_drive_arc();
+        
+        /* 执行弧线循迹 */
+        {
+            float error = 0.0f;
+            bool line_valid = line_calc_error_arc_f(pattern, &error);
+            app_task_arc_step(pattern, error, line_valid);
+        }
         break;
 
     default:
@@ -367,6 +506,8 @@ static void task_run_route(void)
         break;
     }
 }
+
+/* ========== 主入口函数 ========== */
 
 void task_init(void)
 {
@@ -379,6 +520,8 @@ void task_init(void)
     g_yaw_accum_deg = 0.0f;
     g_phase_start_yaw_deg = 0.0f;
     g_distance_base_cm = 0.0f;
+    g_right_turn_pattern_cnt = 0U;
+    g_line_lost_cnt = 0U;
 
     chassis_stop();
     task_show_select();
@@ -409,10 +552,7 @@ void task_step(void)
         return;
     }
 
-    /*
-     * 运行中再次按任意按键可立即停车。
-     * 启动按键必须先松开，再次按下才会产生新事件。
-     */
+    /* 运行中按键停止 */
     key = key_scan();
     if (key != 0U) {
         task_finish(FINISH_CANCELLED);
@@ -423,12 +563,14 @@ void task_step(void)
     number_show_time_ms(g_task_elapsed_ms);
     task_update_yaw();
 
+    /* 超时保护 */
     timeout = task_timeout_ms();
     if ((timeout != 0U) && (g_task_elapsed_ms >= timeout)) {
         task_finish(FINISH_TIMEOUT);
         return;
     }
 
+    /* 执行路线 */
     task_run_route();
     if (g_task_state != TASK_FINISHED) {
         task_show_running();
