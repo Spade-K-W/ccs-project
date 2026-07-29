@@ -33,6 +33,9 @@ void uart_vision_release_speed(void);
  */
 void uart_vision_handshake_mode(uint8_t mode);
 
+/* 把 SPI 收到的泰山派 MOSI 数据刷到 UART0（主循环/握手等待中调用） */
+void uart_vision_flush_rx_to_uart(void);
+
 uint32_t uart_vision_get_tx_ok_count(void);
 uint32_t uart_vision_get_tx_fail_count(void);
 

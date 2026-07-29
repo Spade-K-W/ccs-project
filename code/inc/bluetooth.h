@@ -8,7 +8,7 @@
 
 /*
  * 蓝牙透传：SysConfig Bluetooth_UART_1
- *   RX = PA9，TX = PB4（9600）
+ *   RX = PA9，TX = PB4（115200）
  * 本板作发送端，把 OLED 六行状态发给另一块 TI 板。
  */
 
@@ -24,8 +24,7 @@ void bluetooth_cache_oled_status(const UartDebugStatus *st);
 void bluetooth_send_oled_now(void);
 
 /*
- * 阻塞等待对端蓝牙就绪（互发 BT_READY / BT_ACK）。
- * 调用前应已完成本机 MPU 校准。
+ * 阻塞等待对端：互发 "ok\r\n"，收到带 ok 的一行即成功。
  */
 void bluetooth_wait_peer(void);
 

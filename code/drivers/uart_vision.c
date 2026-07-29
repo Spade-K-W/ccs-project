@@ -39,6 +39,79 @@ static volatile bool    s_gotOk;
 static volatile uint8_t s_handshakeMode;
 static volatile uint8_t s_okMatch; /* 0=等'o'，1=等'k' */
 static bool             s_modeMirrored;
+static volatile uint32_t s_rxByteTotal; /* 含 0x00，用于判断主机是否在给时钟 */
+
+/* 中断里缓存 MOSI 字节，主循环刷到串口（避免在 SPI IRQ 里阻塞打串口） */
+#define SPI_RX_LOG_SIZE (128U)
+static volatile uint8_t s_rxLog[SPI_RX_LOG_SIZE];
+static volatile uint8_t s_rxLogW;
+static volatile uint8_t s_rxLogR;
+
+static void spi_rx_log_push(uint8_t b)
+{
+#if SPI_VISION_MIRROR_RX_UART0
+    uint8_t next;
+
+    /* 主机常发 0x00 填充，丢掉以免串口被刷爆 */
+    if (b == 0x00U) {
+        return;
+    }
+
+    next = (uint8_t)((s_rxLogW + 1U) % SPI_RX_LOG_SIZE);
+    if (next == s_rxLogR) {
+        return;
+    }
+    s_rxLog[s_rxLogW] = b;
+    s_rxLogW          = next;
+#else
+    (void)b;
+#endif
+}
+
+void uart_vision_flush_rx_to_uart(void)
+{
+#if SPI_VISION_MIRROR_RX_UART0
+    char    line[48];
+    uint8_t n = 0U;
+    uint8_t b;
+
+    while (s_rxLogR != s_rxLogW) {
+        b        = s_rxLog[s_rxLogR];
+        s_rxLogR = (uint8_t)((s_rxLogR + 1U) % SPI_RX_LOG_SIZE);
+
+        if ((b >= 0x20U) && (b <= 0x7EU)) {
+            if (n < (uint8_t)(sizeof(line) - 1U)) {
+                line[n++] = (char)b;
+            }
+        } else {
+            if (n > 0U) {
+                line[n] = '\0';
+                uart_debug_puts("SPI RX: ");
+                uart_debug_puts(line);
+                uart_debug_puts("\r\n");
+                n = 0U;
+            }
+            snprintf(line, sizeof(line), "SPI RX: 0x%02X\r\n", (unsigned)b);
+            uart_debug_puts(line);
+        }
+
+        if (n >= 32U) {
+            line[n] = '\0';
+            uart_debug_puts("SPI RX: ");
+            uart_debug_puts(line);
+            uart_debug_puts("\r\n");
+            n = 0U;
+        }
+    }
+
+    if (n > 0U) {
+        line[n] = '\0';
+        uart_debug_puts("SPI RX: ");
+        uart_debug_puts(line);
+        uart_debug_puts("\r\n");
+    }
+#endif
+}
 
 static void spi_fill_tx_fifo(void)
 {
@@ -56,30 +129,41 @@ static void spi_fill_tx_fifo(void)
     }
 }
 
-/* 收 MOSI：握手阶段匹配小写 "ok"，否则丢弃 */
+/* 收 MOSI：握手阶段匹配 "ok"/"OK"（大小写不敏感），并记录非 0 字节供串口打印 */
 static void spi_process_rx(void)
 {
     uint32_t n = 0U;
 
     while (DL_SPI_isRXFIFOEmpty(SPI_1_INST) == false) {
         uint8_t b = DL_SPI_receiveData8(SPI_1_INST);
+        uint8_t c;
+
+        s_rxByteTotal++;
+        spi_rx_log_push(b);
 
         if (s_handshake && !s_gotOk) {
+            /* 统一成小写再比，兼容 OK / Ok / ok */
+            if ((b >= (uint8_t)'A') && (b <= (uint8_t)'Z')) {
+                c = (uint8_t)(b - (uint8_t)'A' + (uint8_t)'a');
+            } else {
+                c = b;
+            }
+
             if (s_okMatch == 0U) {
-                if (b == (uint8_t)'o') {
+                if (c == (uint8_t)'o') {
                     s_okMatch = 1U;
                 }
-            } else if (b == (uint8_t)'k') {
+            } else if (c == (uint8_t)'k') {
                 s_gotOk   = true;
                 s_okMatch = 0U;
-            } else if (b == (uint8_t)'o') {
+            } else if (c == (uint8_t)'o') {
                 s_okMatch = 1U;
             } else {
                 s_okMatch = 0U;
             }
         }
 
-        if (++n >= 16U) {
+        if (++n >= 32U) {
             break;
         }
     }
@@ -152,6 +236,10 @@ static void vision_build_frame(void)
                  (unsigned)state, (double)angleDeg);
     vision_commit_frame(tmp, n, true);
 }
+#else /* !UART_VISION_ENABLE */
+void uart_vision_flush_rx_to_uart(void)
+{
+}
 #endif /* UART_VISION_ENABLE */
 
 void uart_vision_init(void)
@@ -171,6 +259,9 @@ void uart_vision_init(void)
     s_handshakeMode  = 0U;
     s_okMatch        = 0U;
     s_modeMirrored   = false;
+    s_rxLogW         = 0U;
+    s_rxLogR         = 0U;
+    s_rxByteTotal    = 0U;
 
     vision_build_frame();
     vision_spi_hw_init();
@@ -257,9 +348,35 @@ void uart_vision_handshake_mode(uint8_t mode)
     vision_build_mode_frame(true);
     s_modeMirrored = true;
 
-    while (!s_gotOk) {
-        Delay_ms(10U);
+    {
+        uint32_t waitMs = 0U;
+        uint32_t lastRx = 0U;
+        char     tip[40];
+
+        while (!s_gotOk) {
+            uart_vision_flush_rx_to_uart();
+            Delay_ms(10U);
+            waitMs += 10U;
+
+            /* 每 500ms 报告一次：有无 SPI 时钟 / 收到多少字节 */
+            if (waitMs >= 500U) {
+                waitMs = 0U;
+                snprintf(tip, sizeof(tip), "rxBytes:%lu      ",
+                         (unsigned long)s_rxByteTotal);
+                oled_display_string(2, 0, tip);
+                uart_debug_puts(tip);
+                if (s_rxByteTotal == lastRx) {
+                    uart_debug_puts(" (no new SPI clock?)\r\n");
+                } else {
+                    uart_debug_puts("\r\n");
+                    lastRx = s_rxByteTotal;
+                }
+            }
+        }
     }
+
+    uart_vision_flush_rx_to_uart();
+    uart_debug_puts("SPI RX matched: ok\r\n");
 
     s_handshake = false;
     vision_build_frame();
@@ -270,7 +387,7 @@ void uart_vision_handshake_mode(uint8_t mode)
 
     BUZZER_BeepShort();
     oled_display_string(1, 0, "ok              ");
-    uart_debug_puts("ok\r\n");
+    uart_debug_puts("handshake ok\r\n");
     Delay_ms(300U);
 }
 

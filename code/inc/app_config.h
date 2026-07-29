@@ -66,21 +66,26 @@
 #define UART_DEBUG_PRINT_INTERVAL_MS (50U)   /* 串口 0.05s 输出一次（仅转弯） */
 
 /* 蓝牙透传（Bluetooth_UART_1：RX=PA9，TX=PB4）：主循环调用，按间隔发 OLED 六行 */
-#define BLUETOOTH_ENABLE             (0U)
+#define BLUETOOTH_ENABLE             (1U)
 #define BLUETOOTH_SEND_INTERVAL_MS   (20U)
 /* 上电握手：周期广播 BT_READY，收到对端 BT_READY/BT_ACK 即视为链路 OK */
-#define BLUETOOTH_HANDSHAKE_RETRY_MS (100U)
+#define BLUETOOTH_HANDSHAKE_RETRY_MS (500U)  /* 每轮听 500ms，避免半帧被冲掉 */
 
 /* =========================================================
  * 视觉模块 SPI（SPI_1 = 硬件 SPI0）— TI 从机 / 泰山派主机
  *   三线无 CS：SCLK=PB18，PICO=PA14，POCI=PA13(MISO 出数)
  *   Mode0，8bit，MSB，MOTO3
  * 帧：sState:0|1,Angle:±x.xt  （0=直行，1=转弯 + 陀螺仪角）
+ * 上电握手：发 Mode:N，泰山派 MOSI 回小写 ok 后再巡线（VISION_HANDSHAKE_MODE）
  * TIMG0 刷新缓冲；主机 xfer 时 SPI 中断送出
  * ========================================================= */
 #define UART_VISION_ENABLE           (1U)
 #define UART_VISION_SEND_INTERVAL_MS (50U)
 #define SPI_VISION_MIRROR_UART0      (1U)
+/* 1=把泰山派 MOSI 收到的字节打印到 UART0（跳过 0x00 填充） */
+#define SPI_VISION_MIRROR_RX_UART0   (1U)
+/* 上电与泰山派握手：TI 发 Mode:N，等主机 MOSI 回 ok；取值 2~5，默认 2 */
+#define VISION_HANDSHAKE_MODE        (2U)
 
 /* 编码器计数：0=GPIO 中断（推荐，正反转对称）；1=主循环轮询（仅慢速手转调试） */
 #define ENC_CALIB_POLL_MODE          (0U)

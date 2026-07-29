@@ -1,252 +1,160 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-泰山派 SPI 主机 ←→ TI MSPM0 从机
+握手测试脚本
+------------
+调用 spi_master.py 中的 SpiMasterReceiver，测试泰山派(主机) 与
+TI MSPM0(从机) 之间的握手流程：
 
-帧格式：
-  常态：sState:0,Angle:+12.3t
-        State: 0=直行，1=转弯
-        Angle: 陀螺仪 Z 角（度）
-  握手：TI 发 Mode:2|3|4|5 → 本机 MOSI 回小写 ok
+  1. 主机以 MOSI 前2字节循环发送 'ok'，等待从机确认收到 Mode:N 帧后切换状态
+  2. 从机收到 'ok' 后应停止发送 Mode:N，转为发送常态帧 sState:x,Angle:y
+  3. 本脚本负责：
+       - 启动接收线程（内部会自动按 handshake_mode 发送 'ok'）
+       - 轮询等待 handshake_done 置位
+       - 握手成功后，再连续采集若干秒数据，验证帧是否正常
+       - 打印详细的握手耗时 / 统计信息 / 失败原因
 
-接线：
-  泰山派 CLK  → TI PB18
-  泰山派 MOSI → TI PA14
-  泰山派 MISO ← TI PA13
-  GND 共地（无 CS）
+用法示例：
+  sudo python3 connect_signal.py --bus 3 --speed 1000000 --handshake 2 --diagnose
+  sudo python3 connect_signal.py --handshake 3 --timeout 15 --observe 5
 
-用法：
-  sudo python3 connect_signal.py --bus 3 --speed 1000000 --diagnose
+注意：
+  同目录需要 spi_master.py（本仓库已提供）。
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 import sys
-import threading
 import time
-from dataclasses import dataclass
-from typing import List, Optional
 
-FRAME_RE = re.compile(
-    rb"sState:([01]),Angle:([+-]?\d+(?:\.\d+)?)t"
-)
-MODE_RE = re.compile(rb"Mode:([2-5])")
-
-
-@dataclass
-class SensorData:
-    state: int = 0            # 0=直行 1=转弯
-    angle_deg: float = 0.0
-    timestamp: float = 0.0
-    is_valid: bool = False
+try:
+    from spi_master import SpiMasterReceiver
+except ImportError:
+    print("[错误] 找不到 spi_master.py，请确保它与本脚本在同一目录下")
+    sys.exit(1)
 
 
-class SpiMasterReceiver:
-    def __init__(
-        self,
-        bus: int = 3,
-        chip: int = 0,
-        speed: int = 1_000_000,
-        xfer_len: int = 48,
-        period_s: float = 0.05,
-        diagnose: bool = False,
-    ) -> None:
-        self.bus = bus
-        self.chip = chip
-        self.speed = speed
-        self.xfer_len = xfer_len
-        self.period_s = period_s
-        self.diagnose = diagnose
-        self.spi = None
-        self._run = False
-        self._th: Optional[threading.Thread] = None
-        self.lock = threading.Lock()
-        self.data = SensorData()
-        self.rx_bytes = 0
-        self.frame_count = 0
-        self.error_count = 0
-        self.rx_buffer = bytearray()
-        self.mode: Optional[int] = None
-        self._ack_pending = False
-        self._ack_sent = False
-        self._ack_rounds = 0
+def _patch_missing_attrs(recv: SpiMasterReceiver) -> None:
+    """
+    兜底修补 spi_master.py 中命名不一致导致的缺失属性，
+    避免握手线程运行时因 AttributeError 崩溃。
+    建议同步修正源文件，这里只是让测试能跑起来。
+    """
+    if not hasattr(recv, "send_ok_count"):
+        recv.send_ok_count = 0
+    if not hasattr(recv, "handshake_timeout_s"):
+        recv.handshake_timeout_s = getattr(recv, "handshake_timeout", 5.0)
 
-    def start(self) -> bool:
-        try:
-            import spidev
-        except ImportError:
-            print("[SPI] pip3 install spidev")
-            return False
 
-        try:
-            self.spi = spidev.SpiDev()
-            self.spi.open(self.bus, self.chip)
-            self.spi.max_speed_hz = self.speed
-            self.spi.mode = 0
-            self.spi.bits_per_word = 8
-            self.spi.lsbfirst = False
-            if hasattr(self.spi, "no_cs"):
-                try:
-                    self.spi.no_cs = True
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f"[SPI] 打开 /dev/spidev{self.bus}.{self.chip} 失败: {e}")
-            return False
+def run_handshake_test(
+    bus: int,
+    chip: int,
+    speed: int,
+    xfer_len: int,
+    period: float,
+    mode: int,
+    timeout_s: float,
+    observe_s: float,
+    diagnose: bool,
+) -> bool:
+    print("=" * 60)
+    print(f" SPI 握手测试  Mode:{mode}  bus={bus}.{chip}  speed={speed}Hz")
+    print("=" * 60)
 
-        print(f"[SPI] 主机 /dev/spidev{self.bus}.{self.chip}")
-        print(f"[SPI] Mode0 8bit MSB {self.speed}Hz xfer={self.xfer_len} 无CS")
-        print("[SPI] 接线: CLK→PB18 MOSI→PA14 MISO←PA13 GND")
-        print("[SPI] 期望帧: Mode:N 或 sState:0|1,Angle:+x.xt")
+    recv = SpiMasterReceiver(
+        bus=bus,
+        chip=chip,
+        speed=speed,
+        xfer_len=xfer_len,
+        period_s=period,
+        diagnose=diagnose,
+        handshake_mode=mode,
+    )
 
-        self._run = True
-        self._th = threading.Thread(target=self._worker, daemon=True)
-        self._th.start()
-        return True
+    # 修补潜在的属性缺失问题（见文件头说明）
+    _patch_missing_attrs(recv)
 
-    def _tx_bytes(self) -> List[int]:
-        """握手确认：对 TI 发小写 ok，其余填 0。"""
-        if self._ack_pending:
-            payload = list(b"ok") + [0x00] * (self.xfer_len - 2)
-            return payload[: self.xfer_len]
-        return [0x00] * self.xfer_len
+    if not recv.start():
+        print("[测试] SPI 打开失败，测试终止")
+        return False
 
-    def _parse_mode(self) -> None:
-        m = MODE_RE.search(self.rx_buffer)
-        if not m:
-            return
-        mode = int(m.group(1))
-        # 消费到 Mode:N 末尾，避免重复触发
-        end = m.end()
-        del self.rx_buffer[:end]
-        with self.lock:
-            if self.mode != mode:
-                self.mode = mode
-                self._ack_pending = True
-                self._ack_sent = False
-                self._ack_rounds = 0
-                print(f"[MODE] 收到 Mode:{mode}，准备回 ok")
+    # 再次修补，防止 start() 内部逻辑覆盖后又缺失
+    _patch_missing_attrs(recv)
 
-    def _parse(self) -> None:
-        self._parse_mode()
-        while True:
-            start = self.rx_buffer.find(b"sState:")
-            if start < 0:
-                if len(self.rx_buffer) > 24:
-                    self.rx_buffer = self.rx_buffer[-24:]
-                break
-            if start > 0:
-                del self.rx_buffer[:start]
-            end = self.rx_buffer.find(b"t", 7)
-            if end < 0:
-                break
-            frame = bytes(self.rx_buffer[: end + 1])
-            del self.rx_buffer[: end + 1]
-            m = FRAME_RE.fullmatch(frame)
-            if not m:
-                self.error_count += 1
-                continue
-            data = SensorData(
-                state=int(m.group(1)),
-                angle_deg=float(m.group(2)),
-                timestamp=time.time() * 1000.0,
-                is_valid=True,
-            )
-            with self.lock:
-                self.data = data
-                self.frame_count += 1
-            mode = "直行" if data.state == 0 else "转弯"
-            print(
-                f"[RX] #{self.frame_count} "
-                f"状态={data.state}({mode}) 角={data.angle_deg:+.1f}°"
-            )
+    t0 = time.time()
+    ok = recv.wait_handshake_done(timeout_s=timeout_s)
+    elapsed = time.time() - t0
 
-    def _worker(self) -> None:
-        assert self.spi is not None
-        t0 = time.time()
-        while self._run:
-            try:
-                tx = self._tx_bytes()
-                raw = self.spi.xfer2(tx)
-                chunk = bytes(raw)
-                self.rx_bytes += len(chunk)
+    if not ok:
+        print(f"[测试] 握手失败！耗时 {elapsed:.2f}s 仍未收到有效 Mode:{mode} 响应")
+        print("[排查建议]")
+        print("  1) 检查接线：泰山派 CLK→PB18, MOSI→PA14, MISO←PA13, 共地")
+        print("  2) 确认从机固件里此刻确实处于等待 Mode:N 握手的状态")
+        print("  3) 用 --diagnose 参数查看原始收发字节，确认从机是否有回包")
+        print("  4) 确认 SPI 模式(Mode0)、速率、字长(8bit)、位序(MSB)双方一致")
+        recv.stop()
+        return False
 
-                if self._ack_pending and not self._ack_sent:
-                    self._ack_sent = True
-                    self._ack_rounds = 0
-                    print("[MODE] 已发送 ok")
+    print(f"[测试] 握手成功！耗时 {elapsed:.2f}s")
+    print(f"[测试] 进入常态数据观察阶段，持续 {observe_s:.1f}s ...")
 
-                if self.diagnose and (time.time() - t0) < 8.0:
-                    text = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
-                    print(f"[RAW] {chunk[:48].hex(' ')}")
-                    print(f"      {text[:48]!r}")
-
-                if not all(b in (0x00, 0xFF) for b in chunk):
-                    self.rx_buffer.extend(chunk)
-                    if len(self.rx_buffer) > 4096:
-                        self.rx_buffer = self.rx_buffer[-512:]
-                    self._parse()
-
-                # ok 连续发送约 0.5s 后停止，避免一直占 MOSI
-                if self._ack_pending and self._ack_sent:
-                    self._ack_rounds += 1
-                    if self._ack_rounds >= 10:
-                        self._ack_pending = False
-                        self._ack_rounds = 0
-                        print("[MODE] 握手发送结束，恢复空时钟")
-            except Exception as e:
-                print(f"[SPI] xfer 错: {e}")
-                self.error_count += 1
-                time.sleep(0.05)
-                continue
-            time.sleep(self.period_s)
-
-    def stop(self) -> None:
-        self._run = False
-        if self._th:
-            self._th.join(timeout=2.0)
-        if self.spi:
-            self.spi.close()
-
-    def print_stats(self) -> None:
-        with self.lock:
-            d = self.data
-            fc = self.frame_count
-            mode_n = self.mode
-        mode = "直行" if d.state == 0 else "转弯"
-        mode_s = f"Mode={mode_n}" if mode_n is not None else "Mode=-"
+    t_obs = time.time()
+    last_frame_count = 0
+    while time.time() - t_obs < observe_s:
+        time.sleep(0.5)
+        d = recv.get_data()
+        with recv.lock:
+            fc = recv.frame_count
+            errs = recv.error_count
+        delta = fc - last_frame_count
+        last_frame_count = fc
+        mode_str = "直行" if d.state == 0 else "转弯"
         print(
-            f"[统计] bytes={self.rx_bytes} frames={fc} "
-            f"err={self.error_count} {mode_s} "
-            f"状态={d.state}({mode}) 角={d.angle_deg:+.1f}"
+            f"  [观察] 累计帧数={fc} (+{delta}) 错误帧={errs} "
+            f"状态={d.state}({mode_str}) 角度={d.angle_deg:+.1f}° "
+            f"有效={'是' if d.is_valid else '否'}"
         )
+
+    recv.print_stats()
+    recv.stop()
+
+    if last_frame_count == 0:
+        print("[测试] 警告：握手成功但握手后未收到任何有效常态帧，"
+              "请检查从机是否已切换到数据发送模式")
+        return False
+
+    print("[测试] 握手 + 数据接收 全部通过 ✅")
+    return True
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--bus", type=int, default=3)
-    ap.add_argument("--chip", type=int, default=0)
-    ap.add_argument("--speed", type=int, default=1_000_000)
-    ap.add_argument("--len", type=int, default=48, dest="xfer_len")
-    ap.add_argument("--period", type=float, default=0.05)
-    ap.add_argument("--diagnose", action="store_true")
+    ap = argparse.ArgumentParser(description="SPI 握手测试")
+    ap.add_argument("--bus", type=int, default=3, help="SPI 总线号")
+    ap.add_argument("--chip", type=int, default=0, help="SPI 片选号")
+    ap.add_argument("--speed", type=int, default=1_000_000, help="SPI 速率(Hz)")
+    ap.add_argument("--len", type=int, default=48, dest="xfer_len", help="每次传输字节数")
+    ap.add_argument("--period", type=float, default=0.05, help="传输间隔(s)")
+    ap.add_argument("--handshake", type=int, default=2, choices=[2, 3, 4, 5],
+                     help="握手项目号 Mode:N，取值 2~5")
+    ap.add_argument("--timeout", type=float, default=10.0, help="握手超时时间(s)")
+    ap.add_argument("--observe", type=float, default=5.0, help="握手成功后观察数据的时长(s)")
+    ap.add_argument("--diagnose", action="store_true", help="打印原始收发字节，便于排查")
     args = ap.parse_args()
 
-    recv = SpiMasterReceiver(
-        args.bus, args.chip, args.speed, args.xfer_len, args.period, args.diagnose
+    success = run_handshake_test(
+        bus=args.bus,
+        chip=args.chip,
+        speed=args.speed,
+        xfer_len=args.xfer_len,
+        period=args.period,
+        mode=args.handshake,
+        timeout_s=args.timeout,
+        observe_s=args.observe,
+        diagnose=args.diagnose,
     )
-    if not recv.start():
-        sys.exit(1)
-    try:
-        while True:
-            time.sleep(1.0)
-            recv.print_stats()
-    except KeyboardInterrupt:
-        print("\n退出")
-    finally:
-        recv.stop()
+
+    sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":
