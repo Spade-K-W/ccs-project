@@ -3,16 +3,16 @@
 
 #include <stdint.h>
 
-/* 第 1~3 关：数码管显示关号后死循环等待 */
-void key1_run(void);
-void key2_run(void);
-void key3_run(void);
+/* 初始化 KEY1/KEY2/KEY3 输入及消抖状态 */
+void key_init(void);
 
 /*
- * 按键选关总入口：
- * 等待 key_1~key_3 任一按下 → 进入对应关（显示 1~3 后卡死）
- * 本函数不返回
+ * 非阻塞扫描，主循环周期调用：
+ *   0：无新按键
+ *   1：KEY1 新按下一次
+ *   2：KEY2 新按下一次
+ *   3：KEY3 新按下一次
  */
-void key_control(void);
+uint8_t key_scan(void);
 
 #endif /* KEY_H */

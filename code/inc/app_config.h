@@ -109,7 +109,7 @@
 /* =========================================================
  * 速度参数（直线 / 路口原地转，不含弧线）
  * ========================================================= */
-#define BASE_SPEED_STRAIGHT         (25) /* 直线锁航向 / 循迹共模速度 */
+#define BASE_SPEED_STRAIGHT         (30) /* 直线锁航向 / 循迹共模速度 */
 
 /*
  * 路口原地转（CH123/678 状态机用，与弧线四电机无关）：
@@ -239,7 +239,7 @@
  * ========================================================= */
 
 /* --- 1) 速度 --- */
-#define BASE_SPEED_ARC              (20)  /* 共模略降，把余量留给差速 */
+#define BASE_SPEED_ARC              (25)  /* 共模略降，把余量留给差速 */
 /*
  * 线在正中时的弯道前馈差速（转不过就加大）：
  *   左弧 prepare(+1)：L=BASE-BIAS, R=BASE+BIAS
@@ -276,7 +276,7 @@
 #define LINE_WEIGHT_ARC_CH8         (3)
 
 #define KP_LINE_ARC                 (18.0f) /* 偏线时再加大拧弯 */
-#define KD_LINE_ARC                 (0.5f)
+#define KD_LINE_ARC                 (0.2f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
 #define KD_GYRO_ARC                 (0.00f)
@@ -285,7 +285,11 @@
 
 #define ARC_ENTER_ASSIST_MS         (400U)
 #define ARC_ENTER_TURN_BIAS         (10)  /* 入弧再加拧，帮助咬住弯 */
-
+/*
+ * 进入弧线阶段后，先用普通红外巡线直行该时长；
+ * 到时后才加入 ARC_CURVE_BIAS 和 ARC_ENTER_TURN_BIAS。
+ */
+#define ARC_LINE_ONLY_MS             (1000U)
 /* --- 3) Straight ↔ Arc --- */
 #define LINE_DETECT_HOLD_CNT        (3U)
 #define LINE_LOST_HOLD_CNT          (8U)

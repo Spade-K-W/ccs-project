@@ -80,6 +80,7 @@ static int16_t   g_cmdLeft           = 0;
 static int16_t   g_cmdRight          = 0;
 static int16_t   g_outLeft           = 0;  /* 速度环修正后实际下发 */
 static int16_t   g_outRight          = 0;
+static uint8_t   g_driveSpeedPercent = 100U;
 
 /* Straight(锁航向) ↔ Arc(循迹) 演示状态机 */
 typedef enum {
@@ -94,6 +95,21 @@ static uint8_t        g_lineSeeCnt     = 0U;
 static uint8_t        g_lineLostCnt    = 0U;
 static float          g_arcYawAccumDeg = 0.0f; /* 入弧后累计偏航（可过 ±180） */
 static float          g_arcYawLastDeg  = 0.0f;
+
+static int16_t drive_scale_speed(int16_t speed)
+{
+    return (int16_t)(((int32_t)speed * (int32_t)g_driveSpeedPercent) / 100);
+}
+
+void app_task_set_speed_percent(uint8_t percent)
+{
+    if (percent < 1U) {
+        percent = 1U;
+    } else if (percent > 100U) {
+        percent = 100U;
+    }
+    g_driveSpeedPercent = percent;
+}
 
 #if 0 /* 以下为整库未调用的比赛代码，暂禁用 */
 /* ============================================================
@@ -355,6 +371,8 @@ void line_follow_drive(uint8_t pattern, float error, bool lineValid)
             left  = (int16_t)SEARCH_SPEED_HIGH;
             right = (int16_t)SEARCH_SPEED_LOW;
         }
+        left  = drive_scale_speed(left);
+        right = drive_scale_speed(right);
         chassis_set_with_accel(left, right);
         line_follow_refresh_ui(pattern, error, lineValid, "go straight     ");
         return;
@@ -371,12 +389,15 @@ void line_follow_drive(uint8_t pattern, float error, bool lineValid)
     if (right < 0) {
         right = 0;
     }
+    left  = drive_scale_speed(left);
+    right = drive_scale_speed(right);
     chassis_set_with_accel(left, right);
     line_follow_refresh_ui(pattern, error, lineValid, "go straight     ");
 }
 
 /* 弧线循迹：入弧辅助计时与方向 */
 static uint32_t g_arcPhaseMs    = 0U;
+static uint32_t g_arcStartMs    = 0U;
 static uint32_t g_arcCoastMs    = 0U; /* 末端 coast 已持续时长 */
 static float    g_arcMirrorDir  = 1.0f;
 static int16_t  g_arcCoastLeft  = 0; /* 贴线最后一拍 Cmd，弧末端线灭后沿用 */
@@ -389,13 +410,13 @@ void app_task_arc_prepare(float mirrorDir)
     int16_t bias;
 
     g_arcPhaseMs     = 0U;
+    g_arcStartMs     = motor_millis();
     g_arcCoastMs     = 0U;
     g_arcMirrorDir   = (mirrorDir >= 0.0f) ? 1.0f : -1.0f;
     g_arcYawLastDeg  = mpu6050_get_z_angle_deg();
     g_arcYawAccumDeg = 0.0f;
     g_arcRecovering  = false;
     g_arcCoasting    = false;
-    g_lastError      = 0;
 
     bias = (int16_t)ARC_CURVE_BIAS;
     if (g_arcMirrorDir >= 0.0f) {
@@ -411,6 +432,8 @@ void app_task_arc_prepare(float mirrorDir)
     if (g_arcCoastRight < 0) {
         g_arcCoastRight = 0;
     }
+    g_arcCoastLeft  = drive_scale_speed(g_arcCoastLeft);
+    g_arcCoastRight = drive_scale_speed(g_arcCoastRight);
 
     pid_line_reset();
     pid_accel_reset();
@@ -451,7 +474,19 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     bool    angleDone;
     bool    nearArcEnd;
 
-    g_arcPhaseMs += (uint32_t)LOOP_PERIOD_MS;
+    g_arcPhaseMs = motor_millis() - g_arcStartMs;
+    /*
+     * 弧线准备段：进入弧线状态后的前 ARC_LINE_ONLY_MS，
+     * 仍使用普通红外巡线，不施加任何强制左/右转前馈。
+     */
+    if (g_arcPhaseMs <= (uint32_t)ARC_LINE_ONLY_MS) {
+        float straightError = 0.0f;
+        bool straightValid = line_calc_error_f(pattern, &straightError);
+
+        line_follow_drive(pattern, straightError, straightValid);
+        return;
+    }
+
     leftArc    = (g_arcMirrorDir >= 0.0f);
     keepMin    = (int16_t)ARC_STEER_KEEP_MIN;
     absYaw     = fabsf(g_arcYawAccumDeg);
@@ -480,13 +515,15 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
             arc_apply_coast(pattern, errF, angleDone);
             return;
         } else {
-            if (leftArc) {
+            if (g_lastError < 0) {
                 spdL = (int16_t)ARC_LOST_SPEED_L;
                 spdR = (int16_t)ARC_LOST_SPEED_R;
             } else {
                 spdL = (int16_t)ARC_LOST_SPEED_R;
                 spdR = (int16_t)ARC_LOST_SPEED_L;
             }
+            spdL = drive_scale_speed(spdL);
+            spdR = drive_scale_speed(spdR);
             chassis_set_openloop(spdL, spdR);
             line_follow_refresh_ui(pattern, errF, false, "Arc recover     ");
             return;
@@ -500,13 +537,15 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
         }
 
         g_arcRecovering = true;
-        if (leftArc) {
+        if (g_lastError < 0) {
             spdL = (int16_t)ARC_LOST_SPEED_L;
             spdR = (int16_t)ARC_LOST_SPEED_R;
         } else {
             spdL = (int16_t)ARC_LOST_SPEED_R;
             spdR = (int16_t)ARC_LOST_SPEED_L;
         }
+        spdL = drive_scale_speed(spdL);
+        spdR = drive_scale_speed(spdR);
         chassis_set_openloop(spdL, spdR);
         line_follow_refresh_ui(pattern, errF, false, "Arc recover     ");
         return;
@@ -517,12 +556,14 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
 
     if (leftArc) {
         feedforward = -(int16_t)ARC_CURVE_BIAS;
-        if (g_arcPhaseMs <= (uint32_t)ARC_ENTER_ASSIST_MS) {
+          if (g_arcPhaseMs <=
+            ((uint32_t)ARC_LINE_ONLY_MS + (uint32_t)ARC_ENTER_ASSIST_MS)) {
             feedforward -= (int16_t)ARC_ENTER_TURN_BIAS;
         }
     } else {
         feedforward = (int16_t)ARC_CURVE_BIAS;
-        if (g_arcPhaseMs <= (uint32_t)ARC_ENTER_ASSIST_MS) {
+         if (g_arcPhaseMs <=
+            ((uint32_t)ARC_LINE_ONLY_MS + (uint32_t)ARC_ENTER_ASSIST_MS)) {
             feedforward += (int16_t)ARC_ENTER_TURN_BIAS;
         }
     }
@@ -552,6 +593,8 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     if (spdR < 0) {
         spdR = 0;
     }
+    spdL = drive_scale_speed(spdL);
+    spdR = drive_scale_speed(spdR);
 
     g_arcCoastLeft  = spdL;
     g_arcCoastRight = spdR;
@@ -1042,6 +1085,20 @@ static float angle_diff_deg_live(float now, float base)
     return d;
 }
 
+static void app_task_arc_update_yaw(void)
+{
+    float yawNow = mpu6050_get_z_angle_deg();
+
+    g_arcYawAccumDeg += angle_diff_deg_live(yawNow, g_arcYawLastDeg);
+    g_arcYawLastDeg   = yawNow;
+}
+
+void app_task_arc_step(uint8_t pattern, float error, bool lineValid)
+{
+    app_task_arc_update_yaw();
+    line_follow_arc(pattern, error, lineValid);
+}
+
 /* 不循线：陀螺仪锁航向直行 + 速度内环 */
 static void gyro_heading_straight_drive(uint8_t pattern)
 {
@@ -1072,6 +1129,8 @@ static void gyro_heading_straight_drive(uint8_t pattern)
         right = 0;
     }
 
+    left  = drive_scale_speed(left);
+    right = drive_scale_speed(right);
     chassis_set_with_accel(left, right);
     line_follow_refresh_ui(pattern, 0.0f, false, "Straight        ");
 }
@@ -1096,7 +1155,6 @@ void app_task_demo_step(void)
     float   error;
     bool    lineValid;
     bool    anyLine;
-    float   yawNow;
     bool    angleOk;
     bool    lostOk;
     bool    timeOk;
@@ -1128,9 +1186,7 @@ void app_task_demo_step(void)
 
     case DEMO_STATE_ARC:
         /* 累计入弧后偏航（逐步积分，可超过 ±180） */
-        yawNow = mpu6050_get_z_angle_deg();
-        g_arcYawAccumDeg += angle_diff_deg_live(yawNow, g_arcYawLastDeg);
-        g_arcYawLastDeg   = yawNow;
+        app_task_arc_update_yaw();
 
         /*
          * 仅在接近弯末（|A|≥ARC_END_COAST_DEG）才累计线灭：

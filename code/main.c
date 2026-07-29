@@ -13,6 +13,9 @@
 #include "uart_debug.h"
 #include "uart_vision.h"
 #include "bluetooth.h"
+#include "key.h"
+#include "task.h"
+#include "number.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -25,12 +28,13 @@ int main(void)
 
     oled_init();
     oled_clear();
+    number_init();
 
     motor_init();
     chassis_stop();
     encoder_init();
     uart_debug_init();
-    bluetooth_init();
+    //bluetooth_init();
     uart_vision_init();
 
     /* 1. MPU 校准 */
@@ -56,10 +60,8 @@ int main(void)
 
     /* 3. 视觉 SPI 握手：TI 发 Mode:N，等泰山派 MOSI 回 ok，成功后再巡线 */
 #if UART_VISION_ENABLE
-    oled_display_string(1, 0, "SPI handshake   ");
-    uart_debug_puts("SPI vision handshake...\r\n");
-    uart_vision_handshake_mode((uint8_t)VISION_HANDSHAKE_MODE);
-    uart_debug_puts("SPI handshake OK, start line follow\r\n");
+    oled_display_string(1, 0, "SPI vision ready");
+    uart_debug_puts("SPI vision ready, skip blocking handshake\r\n");
 #else
     oled_display_string(1, 0, "No SPI vision   ");
     BUZZER_BeepShort();
@@ -68,10 +70,11 @@ int main(void)
     uart_debug_print_boot_ok();
 
     /* 4. 握手通过 → 循迹 */
-    app_task_demo_prepare(+1.0f);
+    key_init();
+    task_init();
 
     while (1) {
-        app_task_demo_step();
+        task_step();
 #if UART_VISION_ENABLE
         uart_vision_flush_rx_to_uart();
 #endif

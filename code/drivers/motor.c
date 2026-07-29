@@ -1,6 +1,7 @@
 #include "motor.h"
 #include "app_config.h"
 #include "app_utils.h"
+#include "number.h"
 #include <stdbool.h>
 
 /* =========================================================
@@ -9,6 +10,8 @@
  * ========================================================= */
 static volatile uint8_t g_pwmCounter = 0U;
 static bool g_motorDriverEnabled = false;
+static volatile uint32_t g_systemMs = 0U;
+static volatile uint16_t g_msDivider = 0U;
 
 /* =========================================================
  * 根据电机当前 dir 设置方向引脚
@@ -120,7 +123,16 @@ void motor_pwm_init(void)
 void SysTick_Handler(void)
 {
     uint8_t i;
-
+    /*
+ * SOFT_PWM_TICK_HZ 当前为 20000 Hz，
+ * 因此每 20 次中断累计 1 ms。
+ */
+    g_msDivider++;
+    if (g_msDivider >= (uint16_t)(SOFT_PWM_TICK_HZ / 1000U)) {
+        g_msDivider = 0U;
+        g_systemMs++;
+        number_refresh_1ms_isr();
+    }
     g_pwmCounter++;
 
     /* 一个 PWM 周期结束后归零 */
@@ -172,4 +184,12 @@ void motor_init(void)
 
     /* 最后拉高 STBY，退出待机 */
     motor_driver_enable();
+}
+uint32_t motor_millis(void)
+{
+    /*
+     * MSPM0 为 32 位 MCU，对齐的 uint32_t 读取是原子的。
+     * 使用无符号时间差还能正确处理约 49 天后的溢出。
+     */
+    return g_systemMs;
 }

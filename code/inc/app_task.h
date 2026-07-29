@@ -55,6 +55,9 @@ void app_task_straight_prepare(float targetHeadingDeg);
 /* 根据加权误差驱动左右轮，并刷新 OLED/串口 */
 void line_follow_drive(uint8_t pattern, float error, bool lineValid);
 
+/* 设置现有直线/弧线控制的速度比例：1~100，正常速度传 100 */
+void app_task_set_speed_percent(uint8_t percent);
+
 /* 读取最近一次外环目标左右轮速度（未走速度环） */
 void line_follow_get_wheels(int16_t *left, int16_t *right);
 
@@ -72,6 +75,9 @@ void line_follow_right_turn(uint8_t pattern, float error, bool lineValid);
  * 会复位入弧计时与 PID/编码器基准
  */
 void app_task_arc_prepare(float mirrorDir);
+
+/* 弧线单步：累计本段偏航后调用现有弧线循迹控制 */
+void app_task_arc_step(uint8_t pattern, float error, bool lineValid);
 
 /* 弧线循迹单步：弯道前馈 + 红外 PD，同侧前后同速 */
 void line_follow_arc(uint8_t pattern, float error, bool lineValid);

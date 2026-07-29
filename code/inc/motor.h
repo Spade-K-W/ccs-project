@@ -32,4 +32,6 @@ void chassis_set4(int16_t speedA, int16_t speedB, int16_t speedC, int16_t speedD
 /* 停止底盘 */
 void chassis_stop(void);
 
+uint32_t motor_millis(void);
+
 #endif
