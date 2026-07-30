@@ -151,7 +151,7 @@
 #define LINE_WEIGHT_STRAIGHT_CH5    (1.5f)
 #define LINE_WEIGHT_STRAIGHT_CH6    (2.5f)
 #define LINE_WEIGHT_STRAIGHT_CH7    (3.0f)
-#define LINE_WEIGHT_STRAIGHT_CH8    (4.0f)
+#define LINE_WEIGHT_STRAIGHT_CH8    (4.5f)
 
 /* 直线误差死区：|error| 小于该值时不转向（可抑制感器微抖） */
 #define LINE_ERROR_DEADZONE         (0.50f)
@@ -261,7 +261,8 @@
  * ========================================================= */
 
 /* --- 1) 速度 --- */
-#define BASE_SPEED_ARC              (30)  /* 共模略降，把余量留给差速 */
+#define BASE_SPEED_ARC              (30)  /* KEY1弧线共模速度 */
+#define BASE_SPEED_ARC_KEY3         (28)  /* KEY3载球弧线速度，比原值降低2 */
 /*
  * 线在正中时的弯道前馈差速（转不过就加大）：
  *   左弧 prepare(+1)：L=BASE-BIAS, R=BASE+BIAS
@@ -297,10 +298,10 @@
 #define LINE_WEIGHT_ARC_CH7         (2)
 #define LINE_WEIGHT_ARC_CH8         (3)
 
-#define KP_LINE_ARC                 (8.4f) /* 偏线时再加大拧弯 */
+#define KP_LINE_ARC                 (14.4f) /* 偏线时再加大拧弯 */
 #define KD_LINE_ARC                 (0.2f)
-#define KP_LINE_ARC_KEY3_BC         (5.0f)
-#define KP_LINE_ARC_KEY3_DA         (6.5f)
+#define KP_LINE_ARC_KEY3_BC         (12.0f)
+#define KP_LINE_ARC_KEY3_DA         (15.5f)
 #define KD_LINE_ARC_KEY3            (0.0f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
@@ -314,7 +315,10 @@
 /* KEY3载球：直线轮速平滑过渡到弧线轮速，减小入弧瞬时冲击。 */
 #define ARC_ENTRY_RAMP_MS_KEY3      (600U)
 /* KEY3弧线每个10ms周期的单轮目标PWM最大变化量。 */
-#define ARC_SPEED_SLEW_STEP_KEY3    (1)
+#define ARC_SPEED_SLEW_STEP_KEY3    (1.8)
+/* KEY3进入DA后，在该时间内把左右轮目标各自逐渐降低指定PWM。 */
+#define ARC_DA_SLOWDOWN_RAMP_MS_KEY3 (1000U)
+#define ARC_DA_SPEED_REDUCTION_KEY3  (3)
 /*
  * 进入弧线阶段后，先用普通红外巡线直行该时长；
  * 到时后才加入 ARC_CURVE_BIAS 和 ARC_ENTER_TURN_BIAS。

@@ -324,8 +324,14 @@ static int16_t  g_arcEntryLeft  = 0;
 static int16_t  g_arcEntryRight = 0;
 static int16_t  g_arcSlewLeft   = 0;
 static int16_t  g_arcSlewRight  = 0;
+static bool     g_arcSecond     = false;
 static bool     g_arcRecovering = false; /* 异常走出线，原地找回中 */
 static bool     g_arcCoasting   = false; /* 弧线自然结束，保持差速滑行中 */
+
+void app_task_set_second_arc(bool enabled)
+{
+    g_arcSecond = enabled;
+}
 
 static int16_t arc_ramp_speed(int16_t start, int16_t target,
                               uint32_t elapsedMs, uint32_t rampMs)
@@ -353,9 +359,34 @@ static int16_t arc_slew_speed(int16_t current, int16_t target,
     return target;
 }
 
+static int16_t arc_base_speed(void)
+{
+    return pid_is_key3_profile()
+        ? (int16_t)BASE_SPEED_ARC_KEY3
+        : (int16_t)BASE_SPEED_ARC;
+}
+
+static int16_t arc_da_speed_reduction(void)
+{
+    uint32_t reduction;
+
+    if (!pid_is_key3_profile() || !g_arcSecond) {
+        return 0;
+    }
+    if (g_arcPhaseMs >= (uint32_t)ARC_DA_SLOWDOWN_RAMP_MS_KEY3) {
+        return (int16_t)ARC_DA_SPEED_REDUCTION_KEY3;
+    }
+
+    reduction =
+        ((uint32_t)ARC_DA_SPEED_REDUCTION_KEY3 * g_arcPhaseMs)
+        / (uint32_t)ARC_DA_SLOWDOWN_RAMP_MS_KEY3;
+    return (int16_t)reduction;
+}
+
 void app_task_arc_prepare(float mirrorDir)
 {
     int16_t bias;
+    int16_t baseSpeed;
 
     g_arcEntryLeft   = g_cmdLeft;
     g_arcEntryRight  = g_cmdRight;
@@ -371,12 +402,13 @@ void app_task_arc_prepare(float mirrorDir)
     g_arcCoasting    = false;
 
     bias = (int16_t)ARC_CURVE_BIAS;
+    baseSpeed = arc_base_speed();
     if (g_arcMirrorDir >= 0.0f) {
-        g_arcCoastLeft  = (int16_t)BASE_SPEED_ARC - bias;
-        g_arcCoastRight = (int16_t)BASE_SPEED_ARC + bias;
+        g_arcCoastLeft  = baseSpeed - bias;
+        g_arcCoastRight = baseSpeed + bias;
     } else {
-        g_arcCoastLeft  = (int16_t)BASE_SPEED_ARC + bias;
-        g_arcCoastRight = (int16_t)BASE_SPEED_ARC - bias;
+        g_arcCoastLeft  = baseSpeed + bias;
+        g_arcCoastRight = baseSpeed - bias;
     }
     if (g_arcCoastLeft < 0) {
         g_arcCoastLeft = 0;
@@ -419,6 +451,8 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     int16_t spdL;
     int16_t spdR;
     int16_t keepMin;
+    int16_t baseSpeed;
+    int16_t speedReduction;
     float   errF;
     float   absYaw;
     bool    valid;
@@ -441,6 +475,7 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
 
     leftArc    = (g_arcMirrorDir >= 0.0f);
     keepMin    = (int16_t)ARC_STEER_KEEP_MIN;
+    baseSpeed  = arc_base_speed();
     absYaw     = fabsf(g_arcYawAccumDeg);
     angleDone  = (absYaw >= (float)ARC_TARGET_DEG);
     nearArcEnd = (absYaw >= (float)ARC_END_COAST_DEG);
@@ -541,8 +576,8 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
         }
     }
 
-    spdL = (int16_t)BASE_SPEED_ARC + steer;
-    spdR = (int16_t)BASE_SPEED_ARC - steer;
+    spdL = baseSpeed + steer;
+    spdR = baseSpeed - steer;
     if (spdL < 0) {
         spdL = 0;
     }
@@ -558,6 +593,16 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
                               (uint32_t)ARC_ENTRY_RAMP_MS_KEY3);
         spdR = arc_ramp_speed(g_arcEntryRight, spdR, g_arcPhaseMs,
                               (uint32_t)ARC_ENTRY_RAMP_MS_KEY3);
+    }
+
+    speedReduction = arc_da_speed_reduction();
+    spdL -= speedReduction;
+    spdR -= speedReduction;
+    if (spdL < 0) {
+        spdL = 0;
+    }
+    if (spdR < 0) {
+        spdR = 0;
     }
 
     if (pid_is_key3_profile()) {

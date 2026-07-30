@@ -378,6 +378,7 @@ static void task_enter_phase(RoutePhase next)
     g_route_phase = next;
     g_phase_start_yaw_deg = g_yaw_accum_deg;
     pid_set_second_arc_profile(next == ROUTE_DA_ARC);
+    app_task_set_second_arc(next == ROUTE_DA_ARC);
 
     /* 重置红外检测计数 */
     reset_right_turn_detect();
@@ -430,6 +431,7 @@ static void task_start(TaskState state)
 
     pid_set_key3_profile(state == TASK_KEY3_SLOW_LAP);
     pid_set_second_arc_profile(false);
+    app_task_set_second_arc(false);
     app_task_set_speed_percent(speed_percent);
     app_task_straight_prepare(0.0f);
 
@@ -566,6 +568,7 @@ void task_init(void)
     g_cd_da_switch_source = 0U;
     g_cd_last_distance_cm = 0.0f;
     pid_set_second_arc_profile(false);
+    app_task_set_second_arc(false);
 
     chassis_stop();
     app_task_set_oled_debug_enabled(false);
