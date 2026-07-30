@@ -7,6 +7,8 @@
 /* false=KEY1/KEY2默认参数，true=KEY3独立参数 */
 void pid_set_key3_profile(bool enabled);
 bool pid_is_key3_profile(void);
+/* false=第一段BC弧线，true=第二段DA弧线。 */
+void pid_set_second_arc_profile(bool enabled);
 
 void pid_line_reset(void);
 

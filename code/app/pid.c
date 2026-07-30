@@ -32,6 +32,7 @@ static SpeedLoopState s_spdL   = {0};
 static SpeedLoopState s_spdR   = {0};
 static bool           s_turnLoopActive = false;
 static bool           s_key3Profile = false;
+static bool           s_secondArcProfile = false;
 
 void pid_set_key3_profile(bool enabled)
 {
@@ -43,6 +44,14 @@ void pid_set_key3_profile(bool enabled)
 bool pid_is_key3_profile(void)
 {
     return s_key3Profile;
+}
+
+void pid_set_second_arc_profile(bool enabled)
+{
+    if (s_secondArcProfile != enabled) {
+        s_secondArcProfile = enabled;
+        pid_line_reset();
+    }
 }
 
 static int16_t pid_round_i16(float x)
@@ -168,9 +177,13 @@ int16_t pid_line_arc_calc_diff(float error, float mirrorDir)
     s_arcErrFiltered = filteredErr;
 
     /* P：error>0（线偏右/CH678）→ 正差速 → 左快右慢 → 右转回线 */
-    pTerm = (s_key3Profile
-             ? (float)KP_LINE_ARC_KEY3
-             : (float)KP_LINE_ARC) * filteredErr;
+    if (s_key3Profile) {
+        pTerm = (s_secondArcProfile
+                 ? (float)KP_LINE_ARC_KEY3_DA
+                 : (float)KP_LINE_ARC_KEY3_BC) * filteredErr;
+    } else {
+        pTerm = (float)KP_LINE_ARC * filteredErr;
+    }
 
     /* D：抑制抖动 */
     if (!s_arcDReady) {

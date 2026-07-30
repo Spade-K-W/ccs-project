@@ -320,13 +320,47 @@ static uint32_t g_arcCoastMs    = 0U; /* 末端 coast 已持续时长 */
 static float    g_arcMirrorDir  = 1.0f;
 static int16_t  g_arcCoastLeft  = 0; /* 贴线最后一拍 Cmd，弧末端线灭后沿用 */
 static int16_t  g_arcCoastRight = 0;
+static int16_t  g_arcEntryLeft  = 0;
+static int16_t  g_arcEntryRight = 0;
+static int16_t  g_arcSlewLeft   = 0;
+static int16_t  g_arcSlewRight  = 0;
 static bool     g_arcRecovering = false; /* 异常走出线，原地找回中 */
 static bool     g_arcCoasting   = false; /* 弧线自然结束，保持差速滑行中 */
+
+static int16_t arc_ramp_speed(int16_t start, int16_t target,
+                              uint32_t elapsedMs, uint32_t rampMs)
+{
+    int32_t delta;
+
+    if ((rampMs == 0U) || (elapsedMs >= rampMs)) {
+        return target;
+    }
+
+    delta = (int32_t)target - (int32_t)start;
+    return (int16_t)((int32_t)start
+           + ((delta * (int32_t)elapsedMs) / (int32_t)rampMs));
+}
+
+static int16_t arc_slew_speed(int16_t current, int16_t target,
+                              int16_t maxStep)
+{
+    if (target > (int16_t)(current + maxStep)) {
+        return (int16_t)(current + maxStep);
+    }
+    if (target < (int16_t)(current - maxStep)) {
+        return (int16_t)(current - maxStep);
+    }
+    return target;
+}
 
 void app_task_arc_prepare(float mirrorDir)
 {
     int16_t bias;
 
+    g_arcEntryLeft   = g_cmdLeft;
+    g_arcEntryRight  = g_cmdRight;
+    g_arcSlewLeft    = g_cmdLeft;
+    g_arcSlewRight   = g_cmdRight;
     g_arcPhaseMs     = 0U;
     g_arcStartMs     = motor_millis();
     g_arcCoastMs     = 0U;
@@ -385,7 +419,6 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     int16_t spdL;
     int16_t spdR;
     int16_t keepMin;
-    int16_t enterAssistBias;
     float   errF;
     float   absYaw;
     bool    valid;
@@ -472,21 +505,22 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
 
     g_lastError = (int16_t)errF;
     pd = pid_line_arc_calc_diff(errF, 1.0f);
-    enterAssistBias = pid_is_key3_profile()
-        ? (int16_t)ARC_ENTER_TURN_BIAS_KEY3
-        : (int16_t)ARC_ENTER_TURN_BIAS;
 
     if (leftArc) {
         feedforward = -(int16_t)ARC_CURVE_BIAS;
-        if (g_arcPhaseMs <=
-            ((uint32_t)ARC_LINE_ONLY_MS + (uint32_t)ARC_ENTER_ASSIST_MS)) {
-            feedforward -= enterAssistBias;
+        if ((!pid_is_key3_profile())
+            && (g_arcPhaseMs <=
+                ((uint32_t)ARC_LINE_ONLY_MS
+                 + (uint32_t)ARC_ENTER_ASSIST_MS))) {
+            feedforward -= (int16_t)ARC_ENTER_TURN_BIAS;
         }
     } else {
         feedforward = (int16_t)ARC_CURVE_BIAS;
-        if (g_arcPhaseMs <=
-            ((uint32_t)ARC_LINE_ONLY_MS + (uint32_t)ARC_ENTER_ASSIST_MS)) {
-            feedforward += enterAssistBias;
+        if ((!pid_is_key3_profile())
+            && (g_arcPhaseMs <=
+                ((uint32_t)ARC_LINE_ONLY_MS
+                 + (uint32_t)ARC_ENTER_ASSIST_MS))) {
+            feedforward += (int16_t)ARC_ENTER_TURN_BIAS;
         }
     }
 
@@ -517,6 +551,23 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     }
     spdL = drive_scale_speed(spdL);
     spdR = drive_scale_speed(spdR);
+
+    if (pid_is_key3_profile()
+        && (g_arcPhaseMs < (uint32_t)ARC_ENTRY_RAMP_MS_KEY3)) {
+        spdL = arc_ramp_speed(g_arcEntryLeft, spdL, g_arcPhaseMs,
+                              (uint32_t)ARC_ENTRY_RAMP_MS_KEY3);
+        spdR = arc_ramp_speed(g_arcEntryRight, spdR, g_arcPhaseMs,
+                              (uint32_t)ARC_ENTRY_RAMP_MS_KEY3);
+    }
+
+    if (pid_is_key3_profile()) {
+        spdL = arc_slew_speed(g_arcSlewLeft, spdL,
+                              (int16_t)ARC_SPEED_SLEW_STEP_KEY3);
+        spdR = arc_slew_speed(g_arcSlewRight, spdR,
+                              (int16_t)ARC_SPEED_SLEW_STEP_KEY3);
+        g_arcSlewLeft  = spdL;
+        g_arcSlewRight = spdR;
+    }
 
     g_arcCoastLeft  = spdL;
     g_arcCoastRight = spdR;

@@ -43,12 +43,19 @@ uint8_t line_read_pattern(void)
     return pattern;
 }
 
-static bool line_calc_error_common(uint8_t pattern, int16_t *sum, uint8_t *cnt)
+static bool line_calc_error_common(uint8_t pattern, float *sum, uint8_t *cnt)
 {
-    static const int8_t weights[LINE_SENSOR_CHANNEL_COUNT] = {
-        -4, -3, -2, -1, 1, 2, 3, 4
+    static const float weights[LINE_SENSOR_CHANNEL_COUNT] = {
+        (float)LINE_WEIGHT_STRAIGHT_CH1,
+        (float)LINE_WEIGHT_STRAIGHT_CH2,
+        (float)LINE_WEIGHT_STRAIGHT_CH3,
+        (float)LINE_WEIGHT_STRAIGHT_CH4,
+        (float)LINE_WEIGHT_STRAIGHT_CH5,
+        (float)LINE_WEIGHT_STRAIGHT_CH6,
+        (float)LINE_WEIGHT_STRAIGHT_CH7,
+        (float)LINE_WEIGHT_STRAIGHT_CH8
     };
-    int16_t acc = 0;
+    float acc = 0.0f;
     uint8_t n = 0;
     uint8_t i;
 
@@ -70,26 +77,26 @@ static bool line_calc_error_common(uint8_t pattern, int16_t *sum, uint8_t *cnt)
 
 bool line_calc_error(uint8_t pattern, int16_t *error)
 {
-    int16_t sum;
+    float sum;
     uint8_t cnt;
 
     if (!line_calc_error_common(pattern, &sum, &cnt)) {
         return false;
     }
 
-    *error = sum / (int16_t)cnt;
+    *error = (int16_t)(sum / (float)cnt);
     return true;
 }
 
 bool line_calc_error_f(uint8_t pattern, float *error)
 {
-    int16_t sum;
+    float sum;
     uint8_t cnt;
 
     if (!line_calc_error_common(pattern, &sum, &cnt)) {
         return false;
     }
-    *error = (float)sum / (float)cnt;
+    *error = sum / (float)cnt;
     return true;
 }
 

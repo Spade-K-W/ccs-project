@@ -137,7 +137,21 @@
 
 /* 直线段循迹比例系数（过大易蛇形抖动，建议 5~9） */
 #define KP_LINE_STRAIGHT            (6.5f)
-#define KP_LINE_STRAIGHT_KEY3       (3.0f)
+#define KP_LINE_STRAIGHT_KEY3       (4.5f)
+
+/*
+ * 直线循迹X1~X8权值。
+ * X3~X6提高一级，让车偏离中心时更早使用中间探头纠偏；
+ * X1/X2/X7/X8主要作为较大偏差时的兜底。
+ */
+#define LINE_WEIGHT_STRAIGHT_CH1    (-4.0f)
+#define LINE_WEIGHT_STRAIGHT_CH2    (-3.0f)
+#define LINE_WEIGHT_STRAIGHT_CH3    (-2.5f)
+#define LINE_WEIGHT_STRAIGHT_CH4    (-1.5f)
+#define LINE_WEIGHT_STRAIGHT_CH5    (1.5f)
+#define LINE_WEIGHT_STRAIGHT_CH6    (2.5f)
+#define LINE_WEIGHT_STRAIGHT_CH7    (3.0f)
+#define LINE_WEIGHT_STRAIGHT_CH8    (4.0f)
 
 /* 直线误差死区：|error| 小于该值时不转向（可抑制感器微抖） */
 #define LINE_ERROR_DEADZONE         (0.50f)
@@ -285,8 +299,9 @@
 
 #define KP_LINE_ARC                 (8.4f) /* 偏线时再加大拧弯 */
 #define KD_LINE_ARC                 (0.2f)
-#define KP_LINE_ARC_KEY3            (8.4f)
-#define KD_LINE_ARC_KEY3            (0.2f)
+#define KP_LINE_ARC_KEY3_BC         (5.0f)
+#define KP_LINE_ARC_KEY3_DA         (6.5f)
+#define KD_LINE_ARC_KEY3            (0.0f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
 #define KD_GYRO_ARC                 (0.00f)
@@ -296,7 +311,10 @@
 
 #define ARC_ENTER_ASSIST_MS         (400U)
 #define ARC_ENTER_TURN_BIAS         (10)  /* 入弧再加拧，帮助咬住弯 */
-#define ARC_ENTER_TURN_BIAS_KEY3    (0)   /* KEY3载球时关闭入弧额外差速，减少瞬时扰动 */
+/* KEY3载球：直线轮速平滑过渡到弧线轮速，减小入弧瞬时冲击。 */
+#define ARC_ENTRY_RAMP_MS_KEY3      (600U)
+/* KEY3弧线每个10ms周期的单轮目标PWM最大变化量。 */
+#define ARC_SPEED_SLEW_STEP_KEY3    (1)
 /*
  * 进入弧线阶段后，先用普通红外巡线直行该时长；
  * 到时后才加入 ARC_CURVE_BIAS 和 ARC_ENTER_TURN_BIAS。

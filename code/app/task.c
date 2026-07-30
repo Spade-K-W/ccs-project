@@ -35,7 +35,7 @@
 /* 编码器保护参数 */
 #define TASK_STRAIGHT_DISTANCE_MAX_CM    (220.0f)  /* 直线段编码器保护上限 */
 #define TASK_AB_TURN_ARM_DISTANCE_CM     (90.0f)   /* AB前90cm禁止累计转弯红外特征 */
-#define TASK_CD_TURN_ARM_DISTANCE_CM     (60.0f)   /* CD前60cm禁止累计转弯红外特征 */
+#define TASK_CD_TURN_ARM_DISTANCE_CM     (110.0f)   /* CD前110cm禁止累计转弯红外特征 */
 #define TASK_AB_ARC_PREP_DISTANCE_CM     (220.0f)  /* AB→BC编码器保护阈值 */
 #define TASK_CD_SLOWDOWN_DISTANCE_CM     (125.0f)  /* CD末段开始降速 */
 #define TASK_CD_ARC_PREP_DISTANCE_CM     (170.0f)  /* CD→DA编码器保护阈值 */
@@ -100,6 +100,7 @@ static uint8_t g_line_lost_cnt = 0U;                /* 丢线连续计数 */
 static bool g_cd_slowdown_applied = false;
 static uint8_t g_ab_bc_switch_source = 0U;          /* 1=红外，2=编码器保护 */
 static uint8_t g_cd_da_switch_source = 0U;          /* 1=红外，2=编码器保护 */
+static float g_cd_last_distance_cm = 0.0f;          /* CD当前/切换瞬间距离，供OLED诊断 */
 
 /* 辅助函数 */
 static float abs_f(float value)
@@ -333,6 +334,7 @@ static uint32_t task_timeout_ms(void)
 static void task_show_switch_sources(void)
 {
     char line[22];
+    uint32_t cd_distance_x10;
 
     snprintf(line, sizeof(line), "AB:%u                 ",
              (unsigned int)g_ab_bc_switch_source);
@@ -341,6 +343,13 @@ static void task_show_switch_sources(void)
     snprintf(line, sizeof(line), "CD:%u                 ",
              (unsigned int)g_cd_da_switch_source);
     oled_display_string(1U, 0U, line);
+
+    cd_distance_x10 =
+        (uint32_t)((g_cd_last_distance_cm * 10.0f) + 0.5f);
+    snprintf(line, sizeof(line), "CDcm:%lu.%lu          ",
+             (unsigned long)(cd_distance_x10 / 10U),
+             (unsigned long)(cd_distance_x10 % 10U));
+    oled_display_string(2U, 0U, line);
 }
 
 static void task_show_select(void)
@@ -368,6 +377,7 @@ static void task_enter_phase(RoutePhase next)
     g_distance_base_cm += task_segment_distance_cm();
     g_route_phase = next;
     g_phase_start_yaw_deg = g_yaw_accum_deg;
+    pid_set_second_arc_profile(next == ROUTE_DA_ARC);
 
     /* 重置红外检测计数 */
     reset_right_turn_detect();
@@ -376,6 +386,8 @@ static void task_enter_phase(RoutePhase next)
     if (next == ROUTE_DA_ARC) {
         /* 红外提前触发DA时，也必须先应用CD末段降速。 */
         task_apply_cd_slowdown();
+    } else if (next == ROUTE_CD_STRAIGHT) {
+        g_cd_last_distance_cm = 0.0f;
     }
 
     if ((next == ROUTE_AB_STRAIGHT)
@@ -414,8 +426,10 @@ static void task_start(TaskState state)
     g_cd_slowdown_applied = false;
     g_ab_bc_switch_source = 0U;
     g_cd_da_switch_source = 0U;
+    g_cd_last_distance_cm = 0.0f;
 
     pid_set_key3_profile(state == TASK_KEY3_SLOW_LAP);
+    pid_set_second_arc_profile(false);
     app_task_set_speed_percent(speed_percent);
     app_task_straight_prepare(0.0f);
 
@@ -484,7 +498,9 @@ static void task_run_route(void)
 
     case ROUTE_CD_STRAIGHT:
         /* 直线阶段：红外特征优先，编码器保护 */
-        if (task_segment_distance_cm() >= TASK_CD_SLOWDOWN_DISTANCE_CM) {
+        g_cd_last_distance_cm = task_segment_distance_cm();
+
+        if (g_cd_last_distance_cm >= TASK_CD_SLOWDOWN_DISTANCE_CM) {
             task_apply_cd_slowdown();
         }
 
@@ -548,6 +564,8 @@ void task_init(void)
     g_line_lost_cnt = 0U;
     g_ab_bc_switch_source = 0U;
     g_cd_da_switch_source = 0U;
+    g_cd_last_distance_cm = 0.0f;
+    pid_set_second_arc_profile(false);
 
     chassis_stop();
     app_task_set_oled_debug_enabled(false);
