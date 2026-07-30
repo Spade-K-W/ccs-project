@@ -2,9 +2,14 @@
 #include "board_defs.h"
 #include "app_config.h"
 
-/* 八路巡线模块引脚（74HC4051 多路复用）
- * AD0 -> PB15, AD1 -> PB16, AD2 -> PA17, OUT -> PA28
+/*
+ * 按当前小车安装方向：X1（最左）...X8（最右）。
+ * 对外保持bit0=X1、bit7=X8。
  */
+static const GpioPin *const line_pins[LINE_SENSOR_CHANNEL_COUNT] = {
+    &LINE_X1, &LINE_X2, &LINE_X3, &LINE_X4,
+    &LINE_X5, &LINE_X6, &LINE_X7, &LINE_X8
+};
 
 static bool sensor_on_line(const GpioPin *p)
 {
@@ -24,48 +29,14 @@ static uint8_t bit_count_u8(uint8_t x)
     return c;
 }
 
-static void line_mux_settle(void)
-{
-    volatile uint8_t d;
-
-    for (d = 0; d < 100U; d++) {
-    }
-}
-
-/* 标准接线：AD0=S0, AD1=S1, AD2=S2 */
-static void line_select_channel(uint8_t ch)
-{
-    if ((ch & 0x01U) != 0U) {
-        pin_high(&LINE_AD0);
-    } else {
-        pin_low(&LINE_AD0);
-    }
-
-    if ((ch & 0x02U) != 0U) {
-        pin_high(&LINE_AD1);
-    } else {
-        pin_low(&LINE_AD1);
-    }
-
-    if ((ch & 0x04U) != 0U) {
-        pin_high(&LINE_AD2);
-    } else {
-        pin_low(&LINE_AD2);
-    }
-
-    line_mux_settle();
-}
-
 uint8_t line_read_pattern(void)
 {
     uint8_t pattern = 0U;
     uint8_t ch;
 
-    for (ch = 0; ch < LINE_SENSOR_CHANNEL_COUNT; ch++) {
-        line_select_channel(ch);
-
-        if (sensor_on_line(&LINE_OUT)) {
-            pattern |= (1U << ch);
+    for (ch = 0U; ch < LINE_SENSOR_CHANNEL_COUNT; ch++) {
+        if (sensor_on_line(line_pins[ch])) {
+            pattern |= (uint8_t)(1U << ch);
         }
     }
 
@@ -162,7 +133,7 @@ bool is_vertex_like_pattern(uint8_t pattern)
     return (center_on && (cnt >= 4U));
 }
 
-/* 通道编号按模块 1~8：bit0=CH1 ... bit7=CH8 */
+/* 车辆物理通道从左到右：bit0=CH1 ... bit7=CH8 */
 #define LINE_MASK_CH234   (0x0EU)  /* CH2|CH3|CH4 */
 #define LINE_MASK_CH678   (0xE0U)  /* CH6|CH7|CH8 */
 

@@ -20,13 +20,16 @@ typedef struct {
     volatile int8_t dir;
 } Motor;
 
-/* 八路巡线 4051 引脚（与 SysConfig GPIO_GRP_LINE 一致：AD0=PB15 AD1=PB16 AD2=PA17 OUT=PA28） */
-extern const GpioPin LINE_AD0;
-extern const GpioPin LINE_AD1;
-extern const GpioPin LINE_AD2;
-extern const GpioPin LINE_OUT;
+/* 亚博 YB-MUX04-1.0 八路数字输出 */
+extern const GpioPin LINE_X1;
+extern const GpioPin LINE_X2;
+extern const GpioPin LINE_X3;
+extern const GpioPin LINE_X4;
+extern const GpioPin LINE_X5;
+extern const GpioPin LINE_X6;
+extern const GpioPin LINE_X7;
+extern const GpioPin LINE_X8;
 
-extern const GpioPin BUZZER;
 extern const GpioPin ELECTROMAGNET;  /* PA24，高电平吸合 */
 extern const GpioPin MOTOR_STBY;
 extern const GpioPin USER_KEY;

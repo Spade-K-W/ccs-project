@@ -29,8 +29,8 @@
 
 /* 陀螺仪参数 */
 #define TASK_ARC_YAW_DEG                 (180.0f)  /* 弧线转弯180度 */
-#define TASK_KEY1_TARGET_YAW_DEG         (340.0f)  /* KEY1一圈的目标角度 */
-#define TASK_KEY3_TARGET_YAW_DEG         (340.0f)  /* KEY3一圈的目标角度 */
+#define TASK_KEY1_TARGET_YAW_DEG         (350.0f)  /* KEY1一圈的目标角度 */
+#define TASK_KEY3_TARGET_YAW_DEG         (350.0f)  /* KEY3一圈的目标角度 */
 
 /* 编码器保护参数 */
 #define TASK_STRAIGHT_DISTANCE_MAX_CM    (220.0f)  /* 直线段编码器保护上限 */
@@ -210,11 +210,11 @@ static bool detect_line_lost(uint8_t pattern)
 
 /*
  * 最近七帧滚动累计目标通道：
- * AB→BC和CD→DA都要求最近七帧合计覆盖CH567。
+ * AB→BC和CD→DA都要求最近七帧合计覆盖CH7、CH8。
  */
 static bool process_right_turn_detect(uint8_t pattern)
 {
-    const uint8_t required_mask = (uint8_t)0x70U; /* CH5 | CH6 | CH7 */
+    const uint8_t required_mask = (uint8_t)0xC0U; /* CH7 | CH8 */
     uint8_t accumulated;
 
     g_turn_pattern_frame_6 = g_turn_pattern_frame_5;
@@ -261,7 +261,7 @@ static bool should_enter_arc_straight_to_arc(uint8_t pattern)
         return false;
     }
 
-    /* 最近七帧累计覆盖当前路段要求的三个通道时进入弧线。 */
+    /* 最近七帧累计覆盖CH7、CH8时进入弧线。 */
     if (process_right_turn_detect(pattern)) {
         if (g_route_phase == ROUTE_AB_STRAIGHT) {
             g_ab_bc_switch_source = 1U;

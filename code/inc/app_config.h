@@ -12,7 +12,7 @@
 /* =========================================================
  * 外设电平逻辑配置
  * ========================================================= */
-#define LINE_SENSOR_ACTIVE_LOW      (0U)
+#define LINE_SENSOR_ACTIVE_LOW      (1U)  /* YB-MUX04：压到黑线时 X1~X8 输出低电平 */
 #define BUZZER_ACTIVE_HIGH          (1U)  /* 1=高电平发声，低电平静音 */
 #define BOARD_LED_ACTIVE_HIGH       (1U)
 
@@ -283,9 +283,9 @@
 #define LINE_WEIGHT_ARC_CH7         (2)
 #define LINE_WEIGHT_ARC_CH8         (3)
 
-#define KP_LINE_ARC                 (14.4f) /* 偏线时再加大拧弯 */
+#define KP_LINE_ARC                 (8.4f) /* 偏线时再加大拧弯 */
 #define KD_LINE_ARC                 (0.2f)
-#define KP_LINE_ARC_KEY3            (14.4f)
+#define KP_LINE_ARC_KEY3            (8.4f)
 #define KD_LINE_ARC_KEY3            (0.2f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
@@ -296,7 +296,7 @@
 
 #define ARC_ENTER_ASSIST_MS         (400U)
 #define ARC_ENTER_TURN_BIAS         (10)  /* 入弧再加拧，帮助咬住弯 */
-#define ARC_ENTER_TURN_BIAS_KEY3    (5)   /* KEY3低速入弧辅助，减小左轮瞬时增速 */
+#define ARC_ENTER_TURN_BIAS_KEY3    (0)   /* KEY3载球时关闭入弧额外差速，减少瞬时扰动 */
 /*
  * 进入弧线阶段后，先用普通红外巡线直行该时长；
  * 到时后才加入 ARC_CURVE_BIAS 和 ARC_ENTER_TURN_BIAS。

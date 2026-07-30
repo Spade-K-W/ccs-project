@@ -2,28 +2,19 @@
 #include "app_config.h"
 #include "rgb_sk6812.h"
 
-/*
- * 循迹多路选择：AD0->PB15, AD1->PB16, AD2->PA17, OUT->PA28
- * （与 SysConfig GPIO_GRP_LINE 一致）
- */
-const GpioPin LINE_AD0 = {GPIO_GRP_LINE_AD0_PORT, GPIO_GRP_LINE_AD0_PIN};
-const GpioPin LINE_AD1 = {GPIO_GRP_LINE_AD1_PORT, GPIO_GRP_LINE_AD1_PIN};
-const GpioPin LINE_AD2 = {GPIO_GRP_LINE_AD2_PORT, GPIO_GRP_LINE_AD2_PIN};
-const GpioPin LINE_OUT = {GPIO_GRP_LINE_OUT_PORT, GPIO_GRP_LINE_OUT_PIN};
+/* 亚博 YB-MUX04-1.0：X1~X8 全部配置为 MCU 输入。 */
+const GpioPin LINE_X1 = {GPIO_GRP_LINE_X1_PORT, GPIO_GRP_LINE_X1_PIN};
+const GpioPin LINE_X2 = {GPIO_GRP_LINE_X2_PORT, GPIO_GRP_LINE_X2_PIN};
+const GpioPin LINE_X3 = {GPIO_GRP_LINE_X3_PORT, GPIO_GRP_LINE_X3_PIN};
+const GpioPin LINE_X4 = {GPIO_GRP_LINE_X4_PORT, GPIO_GRP_LINE_X4_PIN};
+const GpioPin LINE_X5 = {GPIO_GRP_LINE_X5_PORT, GPIO_GRP_LINE_X5_PIN};
+const GpioPin LINE_X6 = {GPIO_GRP_LINE_X6_PORT, GPIO_GRP_LINE_X6_PIN};
+const GpioPin LINE_X7 = {GPIO_GRP_LINE_X7_PORT, GPIO_GRP_LINE_X7_PIN};
+const GpioPin LINE_X8 = {GPIO_GRP_LINE_X8_PORT, GPIO_GRP_LINE_X8_PIN};
 
 void line_sensor_gpio_init(void)
 {
-    DL_GPIO_initDigitalOutput(GPIO_GRP_LINE_AD0_IOMUX);
-    DL_GPIO_initDigitalOutput(GPIO_GRP_LINE_AD1_IOMUX);
-    DL_GPIO_initDigitalOutput(GPIO_GRP_LINE_AD2_IOMUX);
-    DL_GPIO_initDigitalInputFeatures(GPIO_GRP_LINE_OUT_IOMUX,
-        DL_GPIO_INVERSION_DISABLE, DL_GPIO_RESISTOR_NONE,
-        DL_GPIO_HYSTERESIS_DISABLE, DL_GPIO_WAKEUP_DISABLE);
-
-    DL_GPIO_clearPins(GPIOB, GPIO_GRP_LINE_AD0_PIN | GPIO_GRP_LINE_AD1_PIN);
-    DL_GPIO_enableOutput(GPIOB, GPIO_GRP_LINE_AD0_PIN | GPIO_GRP_LINE_AD1_PIN);
-    DL_GPIO_clearPins(GPIOA, GPIO_GRP_LINE_AD2_PIN);
-    DL_GPIO_enableOutput(GPIOA, GPIO_GRP_LINE_AD2_PIN);
+    /* 八路输入已由 SYSCFG_DL_init() 根据 GPIO_GRP_LINE 完成初始化。 */
 }
 
 /*
@@ -73,7 +64,6 @@ void vision_spi_hw_init(void)
 #endif
 }
 
-const GpioPin BUZZER = {GPIO_GRP_BUZZER_PORT, GPIO_GRP_BUZZER_BUZZER_PIN};
 const GpioPin ELECTROMAGNET = {Electromagnet_PORT, Electromagnet_PIN_0_PIN};
 const GpioPin MOTOR_STBY = {GPIO_GRP_MOTOR_L_MOTOR_STBY_PORT, GPIO_GRP_MOTOR_L_MOTOR_STBY_PIN};
 const GpioPin USER_KEY = {GPIO_BUTTON_PORT, GPIO_BUTTON_USER_KEY_PIN};
@@ -133,11 +123,6 @@ void board_safe_state(void)
     uint8_t i;
 
     board_led_set(false);
-#if BUZZER_ACTIVE_HIGH
-    pin_low(&BUZZER);
-#else
-    pin_high(&BUZZER);
-#endif
 
     pin_low(&ELECTROMAGNET);  /* 安全态：电磁铁释放 */
 

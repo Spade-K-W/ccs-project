@@ -7,13 +7,8 @@
 /* 八路巡线模块通道数 */
 #define LINE_SENSOR_CHANNEL_COUNT   (8U)
 
-/* 读取 8 路红外当前状态，并打包成 1 个 8 位模式值
- * bit0 -> 最左侧探头 (通道 0)
- * bit7 -> 最右侧探头 (通道 7)
- *
- * 硬件说明（74HC4051 多路复用）：
- *   AD0 / AD1 / AD2 -> 通道选择地址 (S0 / S1 / S2)
- *   OUT             -> 公共数字输出 (Z)
+/* 读取X1~X8，并打包成一个8位模式值：
+ * bit0~bit7分别对应X1~X8。
  */
 uint8_t line_read_pattern(void);
 
@@ -35,7 +30,7 @@ bool line_ch234_all_on(uint8_t pattern);
 /* 通道 6/7/8（bit5~7，偏右）是否同时压线 */
 bool line_ch678_all_on(uint8_t pattern);
 
-/* 八路全部压线（大黑区 / 十字中心） */
+/* X1~X8全部压线（大黑区 / 十字中心） */
 bool line_all_on(uint8_t pattern);
 
 #endif

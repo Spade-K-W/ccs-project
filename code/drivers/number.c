@@ -17,7 +17,7 @@ static const uint8_t SEG_CODE[10] = {
 #define NUMBER_DIGITS       (4U)
 #define NUMBER_BLANK        (0xFFU)
 #define NUMBER_DP_MASK      (0x80U)
-#define NUMBER_MAX_CS       (9999U)
+#define NUMBER_MAX_SECONDS  (99U)
 
 /* SysConfig 组 number：SCLK=PB27 RCLK=PB25 DIO=PB26 */
 static const GpioPin NUM_SCLK = {number_PORT, number_SCLK_PIN};
@@ -96,20 +96,19 @@ void number_show_digit(uint8_t digit)
 
 void number_show_time_ms(uint32_t elapsed_ms)
 {
-    uint32_t centiseconds = elapsed_ms / 10U;
+    uint32_t seconds = elapsed_ms / 1000U;
     uint32_t primask;
 
-    if (centiseconds > NUMBER_MAX_CS) {
-        centiseconds = NUMBER_MAX_CS;
+    if (seconds > NUMBER_MAX_SECONDS) {
+        seconds = NUMBER_MAX_SECONDS;
     }
 
     primask = number_lock();
-    g_number_digits[3] = (uint8_t)((centiseconds / 1000U) % 10U);
-    g_number_digits[2] = (uint8_t)((centiseconds / 100U) % 10U);
-    g_number_digits[1] = (uint8_t)((centiseconds / 10U) % 10U);
-    g_number_digits[0] = (uint8_t)(centiseconds % 10U);
-    /* 显示为 SS.hh：第 2 位数字后点亮小数点。 */
-    g_number_dp_mask = (uint8_t)(1U << 1U);
+    g_number_digits[3] = (uint8_t)(seconds / 10U);
+    g_number_digits[2] = (uint8_t)(seconds % 10U);
+    g_number_digits[1] = NUMBER_BLANK;
+    g_number_digits[0] = NUMBER_BLANK;
+    g_number_dp_mask = 0U;
     number_unlock(primask);
 }
 

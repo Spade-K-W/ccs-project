@@ -34,7 +34,7 @@ int main(void)
 {
     /* ========== 1. 系统与硬件初始化 ========== */
     SYSCFG_DL_init();           /* TI MCU系统初始化 */
-    line_sensor_gpio_init();    /* 红外传感器多路复用初始化 */
+    line_sensor_gpio_init();    /* 八路红外 GPIO 输入初始化 */
     board_safe_state();         /* 板级安全状态设置 */
 
     oled_init();                /* OLED初始化 */
