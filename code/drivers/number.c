@@ -17,7 +17,7 @@ static const uint8_t SEG_CODE[10] = {
 #define NUMBER_DIGITS       (4U)
 #define NUMBER_BLANK        (0xFFU)
 #define NUMBER_DP_MASK      (0x80U)
-#define NUMBER_MAX_SECONDS  (99U)
+#define NUMBER_MAX_TENTHS   (999U)
 
 /* SysConfig 组 number：SCLK=PB27 RCLK=PB25 DIO=PB26 */
 static const GpioPin NUM_SCLK = {number_PORT, number_SCLK_PIN};
@@ -96,19 +96,21 @@ void number_show_digit(uint8_t digit)
 
 void number_show_time_ms(uint32_t elapsed_ms)
 {
-    uint32_t seconds = elapsed_ms / 1000U;
+    uint32_t tenths = elapsed_ms / 100U;
+    uint32_t seconds;
     uint32_t primask;
 
-    if (seconds > NUMBER_MAX_SECONDS) {
-        seconds = NUMBER_MAX_SECONDS;
+    if (tenths > NUMBER_MAX_TENTHS) {
+        tenths = NUMBER_MAX_TENTHS;
     }
+    seconds = tenths / 10U;
 
     primask = number_lock();
     g_number_digits[3] = (uint8_t)(seconds / 10U);
     g_number_digits[2] = (uint8_t)(seconds % 10U);
-    g_number_digits[1] = NUMBER_BLANK;
+    g_number_digits[1] = (uint8_t)(tenths % 10U);
     g_number_digits[0] = NUMBER_BLANK;
-    g_number_dp_mask = 0U;
+    g_number_dp_mask = (uint8_t)(1U << 2);
     number_unlock(primask);
 }
 

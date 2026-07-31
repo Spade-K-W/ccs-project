@@ -10,7 +10,7 @@ void number_init(void);
 /* 仅在第 1 位显示 0~9，其余位熄灭 */
 void number_show_digit(uint8_t digit);
 
-/* 左侧两位显示运行秒数 00~99，右侧两位熄灭，超过 99 秒保持 99 */
+/* 显示秒十位、秒个位和十分之一秒（例如12.3），超过99.9秒保持99.9 */
 void number_show_time_ms(uint32_t elapsed_ms);
 
 /* 由 1ms 定时中断调用，完成四位动态扫描 */

@@ -10,6 +10,59 @@
 #define CPU_CLOCK_HZ                (80000000U)
 
 /* =========================================================
+ * 比赛任务状态机参数（task.c统一从这里读取）
+ *
+ * 常用循迹调参还包括本文件下方的：
+ *   BASE_SPEED_STRAIGHT
+ *   BASE_SPEED_ARC / BASE_SPEED_ARC_KEY3
+ *   KP_LINE_STRAIGHT / KD_LINE_STRAIGHT
+ *   KP_LINE_STRAIGHT_KEY3 / KD_LINE_STRAIGHT_KEY3
+ *   KP_LINE_ARC / KD_LINE_ARC
+ *   KP_LINE_ARC_KEY3_BC / KP_LINE_ARC_KEY3_DA
+ * ========================================================= */
+
+/* 当前红外转弯特征：0xC0 = CH7 | CH8 */
+#define TASK_TURN_REQUIRED_MASK          (0xC0U)
+#define LINE_LOST_CONFIRM_CNT            (5U)
+
+/* MPU转角与整圈停车角度 */
+#define TASK_ARC_YAW_DEG                 (180.0f)
+#define TASK_KEY1_TARGET_YAW_DEG         (350.0f)
+#define TASK_KEY3_TARGET_YAW_DEG         (350.0f)
+#define TASK_LEFT_EXTRA_WAIT_MS          (500U)
+#define TASK_LEFT_EXTRA_WHEEL_PULSES     (133U)  /* 530脉冲/圈的1/4圈 */
+#define TASK_LEFT_EXTRA_WHEEL_SPEED      (18)
+
+/* 直线段红外解锁和编码器保护距离 */
+#define TASK_STRAIGHT_DISTANCE_MAX_CM    (220.0f)
+#define TASK_AB_TURN_ARM_DISTANCE_CM     (90.0f)
+#define TASK_CD_TURN_ARM_DISTANCE_CM     (110.0f)
+#define TASK_AB_ARC_PREP_DISTANCE_CM     (220.0f)
+#define TASK_CD_SLOWDOWN_DISTANCE_CM     (125.0f)
+#define TASK_CD_ARC_PREP_DISTANCE_CM     (170.0f)
+
+/* KEY1/KEY3整车速度比例和CD末段降速量 */
+#define TASK_NORMAL_SPEED_PERCENT        (100U)
+#define TASK_SLOW_SPEED_PERCENT          (70U)
+#define TASK_CD_SPEED_REDUCTION          (5U)
+#define TASK_KEY2_SPEED_PERCENT          (85U) /* 5s内由0线性加速到该比例 */
+#define TASK_KEY2_START_SPEED_PERCENT    (0U)
+#define TASK_KEY2_START_RAMP_MS          (5000U)
+#define TASK_KEY2_STOP_ARM_MS            (1000U) /* 忽略起点A横线 */
+#define TASK_KEY2_STOP_MASK              (0xC0U) /* bit6=X7, bit7=X8 */
+#define TASK_KEY2_POST_DETECT_RUN_MS     (300U)
+/* KEY3按键启动后，从该速度比例线性加速到TASK_SLOW_SPEED_PERCENT。 */
+#define TASK_KEY3_START_SPEED_PERCENT    (40U)
+#define TASK_KEY3_START_RAMP_MS          (600U)
+
+/* 任务超时、OLED刷新和顺时针右弧方向 */
+#define TASK_KEY1_TIMEOUT_MS             (30000U)
+#define TASK_KEY2_TIMEOUT_MS             (8000U)
+#define TASK_KEY3_TIMEOUT_MS             (40000U)
+#define TASK_DISPLAY_PERIOD_MS           (100U)
+#define TASK_ARC_MIRROR_DIR              (-1.0f)
+
+/* =========================================================
  * 外设电平逻辑配置
  * ========================================================= */
 #define LINE_SENSOR_ACTIVE_LOW      (1U)  /* YB-MUX04：压到黑线时 X1~X8 输出低电平 */

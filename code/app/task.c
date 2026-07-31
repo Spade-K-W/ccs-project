@@ -24,33 +24,6 @@
  * 编码器作为保护：防止红外失效时卡死
  */
 
-/* 红外传感器判断参数 */
-#define LINE_LOST_CONFIRM_CNT            (5U)      /* 丢线确认帧数 */
-
-/* 陀螺仪参数 */
-#define TASK_ARC_YAW_DEG                 (180.0f)  /* 弧线转弯180度 */
-#define TASK_KEY1_TARGET_YAW_DEG         (350.0f)  /* KEY1一圈的目标角度 */
-#define TASK_KEY3_TARGET_YAW_DEG         (350.0f)  /* KEY3一圈的目标角度 */
-
-/* 编码器保护参数 */
-#define TASK_STRAIGHT_DISTANCE_MAX_CM    (220.0f)  /* 直线段编码器保护上限 */
-#define TASK_AB_TURN_ARM_DISTANCE_CM     (90.0f)   /* AB前90cm禁止累计转弯红外特征 */
-#define TASK_CD_TURN_ARM_DISTANCE_CM     (110.0f)   /* CD前110cm禁止累计转弯红外特征 */
-#define TASK_AB_ARC_PREP_DISTANCE_CM     (220.0f)  /* AB→BC编码器保护阈值 */
-#define TASK_CD_SLOWDOWN_DISTANCE_CM     (125.0f)  /* CD末段开始降速 */
-#define TASK_CD_ARC_PREP_DISTANCE_CM     (170.0f)  /* CD→DA编码器保护阈值 */
-
-/* 速度参数 */
-#define TASK_NORMAL_SPEED_PERCENT        (100U)
-#define TASK_SLOW_SPEED_PERCENT          (70U)
-#define TASK_CD_SPEED_REDUCTION          (5U)
-
-/* 显示参数 */
-#define TASK_DISPLAY_PERIOD_MS           (100U)
-
-/* app_task.c 约定：+1 为左弧，-1 为右弧；顺时针使用右弧。 */
-#define TASK_ARC_MIRROR_DIR              (-1.0f)
-
 typedef enum {
     TASK_IDLE = 0,
     TASK_KEY1_ONE_LAP,
@@ -63,7 +36,9 @@ typedef enum {
     ROUTE_AB_STRAIGHT = 0,
     ROUTE_BC_ARC,
     ROUTE_CD_STRAIGHT,
-    ROUTE_DA_ARC
+    ROUTE_DA_ARC,
+    ROUTE_LEFT_WHEEL_WAIT,
+    ROUTE_LEFT_WHEEL_EXTRA
 } RoutePhase;
 
 typedef enum {
@@ -100,7 +75,14 @@ static uint8_t g_line_lost_cnt = 0U;                /* 丢线连续计数 */
 static bool g_cd_slowdown_applied = false;
 static uint8_t g_ab_bc_switch_source = 0U;          /* 1=红外，2=编码器保护 */
 static uint8_t g_cd_da_switch_source = 0U;          /* 1=红外，2=编码器保护 */
+static uint8_t g_key2_stop_source = 0U;             /* 1=红外B点，2=编码器保护 */
 static float g_cd_last_distance_cm = 0.0f;          /* CD当前/切换瞬间距离，供OLED诊断 */
+static bool g_key2_start_ramp_done = true;
+static bool g_key2_post_detect_active = false;
+static uint32_t g_key2_post_detect_start_ms = 0U;
+static bool g_key3_start_ramp_done = true;
+static uint32_t g_left_extra_wait_start_ms = 0U;
+static int32_t g_left_extra_start_count = 0;
 
 /* 辅助函数 */
 static float abs_f(float value)
@@ -120,6 +102,62 @@ static uint8_t task_normal_speed_percent(void)
     return (g_task_state == TASK_KEY3_SLOW_LAP)
         ? TASK_SLOW_SPEED_PERCENT
         : TASK_NORMAL_SPEED_PERCENT;
+}
+
+static void task_update_key2_start_ramp(void)
+{
+    uint32_t start_percent;
+    uint32_t target_percent;
+    uint32_t speed_percent;
+
+    if ((g_task_state != TASK_KEY2_A_TO_B)
+        || g_key2_start_ramp_done) {
+        return;
+    }
+
+    start_percent = (uint32_t)TASK_KEY2_START_SPEED_PERCENT;
+    target_percent = (uint32_t)TASK_KEY2_SPEED_PERCENT;
+
+    if ((TASK_KEY2_START_RAMP_MS == 0U)
+        || (start_percent >= target_percent)
+        || (g_task_elapsed_ms >= (uint32_t)TASK_KEY2_START_RAMP_MS)) {
+        app_task_set_speed_percent((uint8_t)target_percent);
+        g_key2_start_ramp_done = true;
+        return;
+    }
+
+    speed_percent = start_percent
+        + (((target_percent - start_percent) * g_task_elapsed_ms)
+           / (uint32_t)TASK_KEY2_START_RAMP_MS);
+    app_task_set_speed_percent((uint8_t)speed_percent);
+}
+
+static void task_update_key3_start_ramp(void)
+{
+    uint32_t start_percent;
+    uint32_t target_percent;
+    uint32_t speed_percent;
+
+    if ((g_task_state != TASK_KEY3_SLOW_LAP)
+        || g_key3_start_ramp_done) {
+        return;
+    }
+
+    start_percent = (uint32_t)TASK_KEY3_START_SPEED_PERCENT;
+    target_percent = (uint32_t)TASK_SLOW_SPEED_PERCENT;
+
+    if ((TASK_KEY3_START_RAMP_MS == 0U)
+        || (start_percent >= target_percent)
+        || (g_task_elapsed_ms >= (uint32_t)TASK_KEY3_START_RAMP_MS)) {
+        app_task_set_speed_percent((uint8_t)target_percent);
+        g_key3_start_ramp_done = true;
+        return;
+    }
+
+    speed_percent = start_percent
+        + (((target_percent - start_percent) * g_task_elapsed_ms)
+           / (uint32_t)TASK_KEY3_START_RAMP_MS);
+    app_task_set_speed_percent((uint8_t)speed_percent);
 }
 
 static uint8_t task_cd_slow_speed_percent(void)
@@ -215,7 +253,7 @@ static bool detect_line_lost(uint8_t pattern)
  */
 static bool process_right_turn_detect(uint8_t pattern)
 {
-    const uint8_t required_mask = (uint8_t)0xC0U; /* CH7 | CH8 */
+    const uint8_t required_mask = (uint8_t)TASK_TURN_REQUIRED_MASK;
     uint8_t accumulated;
 
     g_turn_pattern_frame_6 = g_turn_pattern_frame_5;
@@ -294,22 +332,21 @@ static bool should_enter_arc_straight_to_arc(uint8_t pattern)
  */
 static bool should_stop_at_B_point(uint8_t pattern)
 {
-    /* 检测十字路口或两侧都有传感器 */
-    uint8_t cnt = 0;
-    uint8_t i;
-    for (i = 0; i < 8; i++) {
-        if (pattern & (1U << i)) cnt++;
+    /* 起步保护结束后，X7、X8同帧检测到黑线便立即停车。 */
+    if ((g_task_elapsed_ms >= (uint32_t)TASK_KEY2_STOP_ARM_MS)
+        && ((pattern & (uint8_t)TASK_KEY2_STOP_MASK)
+            == (uint8_t)TASK_KEY2_STOP_MASK)) {
+        g_key2_stop_source = 1U;
+        return true;
     }
 
     /* 编码器保护：防止过度运行 */
-    float distance = task_segment_distance_cm();
-    if (distance >= TASK_STRAIGHT_DISTANCE_MAX_CM) {
-        return true;
-    }
-
-    /* 红外判断：检测到明显的路口特征 */
-    if (is_vertex_like_pattern(pattern) && (cnt >= 6U)) {
-        return true;
+    {
+        float distance = task_segment_distance_cm();
+        if (distance >= TASK_STRAIGHT_DISTANCE_MAX_CM) {
+            g_key2_stop_source = 2U;
+            return true;
+        }
     }
 
     return false;
@@ -321,11 +358,11 @@ static uint32_t task_timeout_ms(void)
 {
     switch (g_task_state) {
     case TASK_KEY1_ONE_LAP:
-        return 30000U;  /* 30秒 */
+        return TASK_KEY1_TIMEOUT_MS;
     case TASK_KEY2_A_TO_B:
-        return 8000U;   /* 8秒 */
+        return TASK_KEY2_TIMEOUT_MS;
     case TASK_KEY3_SLOW_LAP:
-        return 40000U;  /* 40秒 */
+        return TASK_KEY3_TIMEOUT_MS;
     default:
         return 0U;
     }
@@ -343,6 +380,10 @@ static void task_show_switch_sources(void)
     snprintf(line, sizeof(line), "CD:%u                 ",
              (unsigned int)g_cd_da_switch_source);
     oled_display_string(1U, 0U, line);
+
+    snprintf(line, sizeof(line), "K2:%u                 ",
+             (unsigned int)g_key2_stop_source);
+    oled_display_string(3U, 0U, line);
 
     cd_distance_x10 =
         (uint32_t)((g_cd_last_distance_cm * 10.0f) + 0.5f);
@@ -401,10 +442,13 @@ static void task_enter_phase(RoutePhase next)
 
 static void task_start(TaskState state)
 {
-    uint8_t speed_percent =
-        (state == TASK_KEY3_SLOW_LAP)
-        ? TASK_SLOW_SPEED_PERCENT
-        : TASK_NORMAL_SPEED_PERCENT;
+    uint8_t speed_percent = TASK_NORMAL_SPEED_PERCENT;
+
+    if (state == TASK_KEY2_A_TO_B) {
+        speed_percent = TASK_KEY2_START_SPEED_PERCENT;
+    } else if (state == TASK_KEY3_SLOW_LAP) {
+        speed_percent = TASK_KEY3_START_SPEED_PERCENT;
+    }
 
     g_task_state = state;
     g_route_phase = ROUTE_AB_STRAIGHT;
@@ -427,7 +471,28 @@ static void task_start(TaskState state)
     g_cd_slowdown_applied = false;
     g_ab_bc_switch_source = 0U;
     g_cd_da_switch_source = 0U;
+    g_key2_stop_source = 0U;
     g_cd_last_distance_cm = 0.0f;
+    g_key2_start_ramp_done =
+        (state != TASK_KEY2_A_TO_B)
+        || (TASK_KEY2_START_RAMP_MS == 0U)
+        || (TASK_KEY2_START_SPEED_PERCENT >= TASK_KEY2_SPEED_PERCENT);
+    g_key2_post_detect_active = false;
+    g_key2_post_detect_start_ms = 0U;
+    g_left_extra_wait_start_ms = 0U;
+    g_left_extra_start_count = 0;
+    g_key3_start_ramp_done =
+        (state != TASK_KEY3_SLOW_LAP)
+        || (TASK_KEY3_START_RAMP_MS == 0U)
+        || (TASK_KEY3_START_SPEED_PERCENT >= TASK_SLOW_SPEED_PERCENT);
+
+    if ((state == TASK_KEY2_A_TO_B) && g_key2_start_ramp_done) {
+        speed_percent = TASK_KEY2_SPEED_PERCENT;
+    }
+
+    if ((state == TASK_KEY3_SLOW_LAP) && g_key3_start_ramp_done) {
+        speed_percent = TASK_SLOW_SPEED_PERCENT;
+    }
 
     pid_set_key3_profile(state == TASK_KEY3_SLOW_LAP);
     pid_set_second_arc_profile(false);
@@ -444,12 +509,33 @@ static void task_finish(FinishReason reason)
 {
     (void)reason;
 
+    g_key2_post_detect_active = false;
+    g_left_extra_wait_start_ms = 0U;
     chassis_stop();
     number_show_time_ms(g_task_elapsed_ms);
     g_task_state = TASK_FINISHED;
 
     oled_clear();
     task_show_switch_sources();
+}
+
+static void task_begin_left_wheel_extra(void)
+{
+    EncoderCounts counts;
+
+    encoder_get_counts(&counts);
+    g_left_extra_start_count = counts.leftCount;
+    g_route_phase = ROUTE_LEFT_WHEEL_EXTRA;
+
+    /* 物理左侧M3/M4前进，物理右侧M1/M2停止。 */
+    chassis_set((int16_t)TASK_LEFT_EXTRA_WHEEL_SPEED, 0);
+}
+
+static void task_begin_left_wheel_wait(void)
+{
+    g_left_extra_wait_start_ms = g_task_elapsed_ms;
+    g_route_phase = ROUTE_LEFT_WHEEL_WAIT;
+    chassis_stop();
 }
 
 /* ========== 核心路线执行逻辑 ========== */
@@ -463,9 +549,21 @@ static void task_run_route(void)
         /* 直线阶段：红外特征优先，编码器保护 */
         if (g_task_state == TASK_KEY2_A_TO_B) {
             /* KEY2：直到检测到B点停止线 */
-            if (should_stop_at_B_point(pattern)) {
-                task_finish(FINISH_SUCCESS);
-                return;
+            if (g_key2_post_detect_active) {
+                if ((g_task_elapsed_ms - g_key2_post_detect_start_ms)
+                    >= (uint32_t)TASK_KEY2_POST_DETECT_RUN_MS) {
+                    task_finish(FINISH_SUCCESS);
+                    return;
+                }
+            } else if (should_stop_at_B_point(pattern)) {
+                if (g_key2_stop_source == 1U) {
+                    g_key2_start_ramp_done = true;
+                    g_key2_post_detect_active = true;
+                    g_key2_post_detect_start_ms = g_task_elapsed_ms;
+                } else {
+                    task_finish(FINISH_SUCCESS);
+                    return;
+                }
             }
         } else {
             /* KEY1/KEY3：检测到右转特征则进入弧线 */
@@ -522,15 +620,15 @@ static void task_run_route(void)
     case ROUTE_DA_ARC:
         /* 弧线阶段：用陀螺仪判断转弯完成 */
         if (g_task_state == TASK_KEY1_ONE_LAP) {
-            /* KEY1：累计转角达到340度后立即停车 */
+            /* KEY1：累计转角达到350度后，左轮再转1/4圈。 */
             if (abs_f(g_yaw_accum_deg) >= TASK_KEY1_TARGET_YAW_DEG) {
-                task_finish(FINISH_SUCCESS);
+                task_begin_left_wheel_wait();
                 return;
             }
         } else {
-            /* KEY3：累计转角达到340度后立即停车 */
+            /* KEY3：累计转角达到350度后，左轮再转1/4圈。 */
             if (abs_f(g_yaw_accum_deg) >= TASK_KEY3_TARGET_YAW_DEG) {
-                task_finish(FINISH_SUCCESS);
+                task_begin_left_wheel_wait();
                 return;
             }
         }
@@ -540,6 +638,34 @@ static void task_run_route(void)
             float error = 0.0f;
             bool line_valid = line_calc_error_arc_f(pattern, &error);
             app_task_arc_step(pattern, error, line_valid);
+        }
+        break;
+
+    case ROUTE_LEFT_WHEEL_WAIT:
+        chassis_stop();
+        if ((g_task_elapsed_ms - g_left_extra_wait_start_ms)
+            >= (uint32_t)TASK_LEFT_EXTRA_WAIT_MS) {
+            task_begin_left_wheel_extra();
+        }
+        break;
+
+    case ROUTE_LEFT_WHEEL_EXTRA:
+        {
+            EncoderCounts counts;
+            int32_t delta;
+
+            encoder_get_counts(&counts);
+            delta = counts.leftCount - g_left_extra_start_count;
+            if (delta < 0) {
+                delta = -delta;
+            }
+
+            if ((uint32_t)delta >= TASK_LEFT_EXTRA_WHEEL_PULSES) {
+                task_finish(FINISH_SUCCESS);
+                return;
+            }
+
+            chassis_set((int16_t)TASK_LEFT_EXTRA_WHEEL_SPEED, 0);
         }
         break;
 
@@ -566,7 +692,14 @@ void task_init(void)
     g_line_lost_cnt = 0U;
     g_ab_bc_switch_source = 0U;
     g_cd_da_switch_source = 0U;
+    g_key2_stop_source = 0U;
     g_cd_last_distance_cm = 0.0f;
+    g_key2_start_ramp_done = true;
+    g_key2_post_detect_active = false;
+    g_key2_post_detect_start_ms = 0U;
+    g_key3_start_ramp_done = true;
+    g_left_extra_wait_start_ms = 0U;
+    g_left_extra_start_count = 0;
     pid_set_second_arc_profile(false);
     app_task_set_second_arc(false);
 
@@ -610,6 +743,8 @@ void task_step(void)
     g_task_elapsed_ms = motor_millis() - g_task_start_ms;
     number_show_time_ms(g_task_elapsed_ms);
     task_update_yaw();
+    task_update_key2_start_ramp();
+    task_update_key3_start_ramp();
 
     /* 超时保护 */
     timeout = task_timeout_ms();
