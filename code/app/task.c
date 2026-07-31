@@ -78,11 +78,8 @@ static uint8_t g_turn_pattern_frame_6 = 0U;        /* 前6帧目标通道 */
 static uint8_t g_line_lost_cnt = 0U;                /* 丢线连续计数 */
 static uint8_t g_ab_bc_switch_source = 0U;          /* 1=红外，2=编码器保护 */
 static uint8_t g_cd_da_switch_source = 0U;          /* 1=红外，2=编码器保护 */
-static uint8_t g_key2_stop_source = 0U;             /* 1=红外B点，2=编码器保护 */
+static uint8_t g_key2_stop_source = 0U;             /* 3=8秒计时结束 */
 static float g_cd_last_distance_cm = 0.0f;          /* CD当前/切换瞬间距离，供OLED诊断 */
-static bool g_key2_start_ramp_done = true;
-static bool g_key2_post_detect_active = false;
-static uint32_t g_key2_post_detect_start_ms = 0U;
 static bool g_key3_start_ramp_done = true;
 static uint32_t g_left_extra_wait_start_ms = 0U;
 static int32_t g_left_extra_start_count = 0;
@@ -138,14 +135,13 @@ static float task_segment_distance_cm(void)
     return abs_f(distance);
 }
 
-static void task_update_key2_start_ramp(void)
+static void task_update_key2_acceleration(void)
 {
     uint32_t start_percent;
     uint32_t target_percent;
     uint32_t speed_percent;
 
-    if ((g_task_state != TASK_KEY2_A_TO_B)
-        || g_key2_start_ramp_done) {
+    if (g_task_state != TASK_KEY2_A_TO_B) {
         return;
     }
 
@@ -153,16 +149,15 @@ static void task_update_key2_start_ramp(void)
     target_percent = (uint32_t)TASK_KEY2_SPEED_PERCENT;
 
     if ((TASK_KEY2_START_RAMP_MS == 0U)
-        || (start_percent >= target_percent)
-        || (g_task_elapsed_ms >= (uint32_t)TASK_KEY2_START_RAMP_MS)) {
+        || (start_percent >= target_percent)) {
         app_task_set_speed_percent((uint8_t)target_percent);
-        g_key2_start_ramp_done = true;
         return;
     }
 
     speed_percent = start_percent
         + (((target_percent - start_percent) * g_task_elapsed_ms)
            / (uint32_t)TASK_KEY2_START_RAMP_MS);
+
     app_task_set_speed_percent((uint8_t)speed_percent);
 }
 
@@ -173,12 +168,13 @@ static void task_update_key3_start_ramp(void)
     uint32_t speed_percent;
 
     if ((g_task_state != TASK_KEY3_SLOW_LAP)
+        || (g_route_phase != ROUTE_AB_STRAIGHT)
         || g_key3_start_ramp_done) {
         return;
     }
 
     start_percent = (uint32_t)TASK_KEY3_START_SPEED_PERCENT;
-    target_percent = (uint32_t)TASK_SLOW_SPEED_PERCENT;
+    target_percent = (uint32_t)TASK_KEY3_AB_TARGET_PERCENT;
 
     if ((TASK_KEY3_START_RAMP_MS == 0U)
         || (start_percent >= target_percent)
@@ -323,32 +319,6 @@ static bool should_enter_arc_straight_to_arc(uint8_t pattern)
     return false;
 }
 
-/**
- * 主要判断函数：是否应该停止（仅用于KEY2 A→B）
- * 在直线段检测到停止线特征
- */
-static bool should_stop_at_B_point(uint8_t pattern)
-{
-    /* 起步保护结束后，X7、X8同帧检测到黑线便立即停车。 */
-    if ((g_task_elapsed_ms >= (uint32_t)TASK_KEY2_STOP_ARM_MS)
-        && ((pattern & (uint8_t)TASK_KEY2_STOP_MASK)
-            == (uint8_t)TASK_KEY2_STOP_MASK)) {
-        g_key2_stop_source = 1U;
-        return true;
-    }
-
-    /* 编码器保护：防止过度运行 */
-    {
-        float distance = task_segment_distance_cm();
-        if (distance >= TASK_STRAIGHT_DISTANCE_MAX_CM) {
-            g_key2_stop_source = 2U;
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /* ========== UI显示 ========== */
 
 static void task_show_uart_sent(uint8_t key)
@@ -437,6 +407,32 @@ static void task_show_running(void)
 
 /* ========== 状态机 ========== */
 
+static void task_send_route_signal(RoutePhase phase)
+{
+    char signal = '\0';
+
+    switch (phase) {
+    case ROUTE_AB_STRAIGHT:
+        signal = 'A';
+        break;
+    case ROUTE_BC_ARC:
+        signal = 'B';
+        break;
+    case ROUTE_CD_STRAIGHT:
+        signal = 'C';
+        break;
+    case ROUTE_DA_ARC:
+        signal = 'D';
+        break;
+    default:
+        break;
+    }
+
+    if (signal != '\0') {
+        bluetooth_putc(signal);
+    }
+}
+
 static void task_enter_phase(RoutePhase next)
 {
     /* 保存刚完成路段的编码器距离 */
@@ -445,6 +441,18 @@ static void task_enter_phase(RoutePhase next)
     g_phase_start_yaw_deg = g_yaw_accum_deg;
     pid_set_second_arc_profile(next == ROUTE_DA_ARC);
     app_task_set_second_arc(next == ROUTE_DA_ARC);
+
+    /* KEY3让AB、BC、CD、DA的共模速度均保持在约20.7。 */
+    if (g_task_state == TASK_KEY3_SLOW_LAP) {
+        if ((next == ROUTE_BC_ARC) || (next == ROUTE_DA_ARC)) {
+            g_key3_start_ramp_done = true;
+            app_task_set_speed_percent((uint8_t)TASK_SLOW_SPEED_PERCENT);
+        } else if (next == ROUTE_CD_STRAIGHT) {
+            app_task_set_speed_percent((uint8_t)TASK_KEY3_CD_SPEED_PERCENT);
+        }
+    }
+
+    task_send_route_signal(next);
 
     /* 重置红外检测计数 */
     reset_right_turn_detect();
@@ -494,12 +502,6 @@ static void task_start(TaskState state)
     g_cd_da_switch_source = 0U;
     g_key2_stop_source = 0U;
     g_cd_last_distance_cm = 0.0f;
-    g_key2_start_ramp_done =
-        (state != TASK_KEY2_A_TO_B)
-        || (TASK_KEY2_START_RAMP_MS == 0U)
-        || (TASK_KEY2_START_SPEED_PERCENT >= TASK_KEY2_SPEED_PERCENT);
-    g_key2_post_detect_active = false;
-    g_key2_post_detect_start_ms = 0U;
     g_left_extra_wait_start_ms = 0U;
     g_left_extra_start_count = 0;
     g_right_extra_start_count = 0;
@@ -508,14 +510,10 @@ static void task_start(TaskState state)
     g_key3_start_ramp_done =
         (state != TASK_KEY3_SLOW_LAP)
         || (TASK_KEY3_START_RAMP_MS == 0U)
-        || (TASK_KEY3_START_SPEED_PERCENT >= TASK_SLOW_SPEED_PERCENT);
-
-    if ((state == TASK_KEY2_A_TO_B) && g_key2_start_ramp_done) {
-        speed_percent = TASK_KEY2_SPEED_PERCENT;
-    }
+        || (TASK_KEY3_START_SPEED_PERCENT >= TASK_KEY3_AB_TARGET_PERCENT);
 
     if ((state == TASK_KEY3_SLOW_LAP) && g_key3_start_ramp_done) {
-        speed_percent = TASK_SLOW_SPEED_PERCENT;
+        speed_percent = TASK_KEY3_AB_TARGET_PERCENT;
     }
 
     pid_set_key3_profile(state == TASK_KEY3_SLOW_LAP);
@@ -523,6 +521,7 @@ static void task_start(TaskState state)
     app_task_set_second_arc(false);
     app_task_set_speed_percent(speed_percent);
     app_task_straight_prepare(0.0f);
+    task_send_route_signal(ROUTE_AB_STRAIGHT);
 
     oled_clear();
     number_show_time_ms(0U);
@@ -533,13 +532,13 @@ static void task_finish(FinishReason reason)
 {
     (void)reason;
 
-    g_key2_post_detect_active = false;
     g_left_extra_wait_start_ms = 0U;
     g_key3_left_coast_start_ms = 0U;
     g_key3_left_coast_speed = 0;
     chassis_stop();
     number_show_time_ms(g_task_elapsed_ms);
     g_task_state = TASK_FINISHED;
+    bluetooth_putc('F');
 
     oled_clear();
     task_show_switch_sources();
@@ -585,25 +584,7 @@ static void task_run_route(void)
     switch (g_route_phase) {
     case ROUTE_AB_STRAIGHT:
         /* 直线阶段：红外特征优先，编码器保护 */
-        if (g_task_state == TASK_KEY2_A_TO_B) {
-            /* KEY2：直到检测到B点停止线 */
-            if (g_key2_post_detect_active) {
-                if ((g_task_elapsed_ms - g_key2_post_detect_start_ms)
-                    >= (uint32_t)TASK_KEY2_POST_DETECT_RUN_MS) {
-                    task_finish(FINISH_SUCCESS);
-                    return;
-                }
-            } else if (should_stop_at_B_point(pattern)) {
-                if (g_key2_stop_source == 1U) {
-                    g_key2_start_ramp_done = true;
-                    g_key2_post_detect_active = true;
-                    g_key2_post_detect_start_ms = g_task_elapsed_ms;
-                } else {
-                    task_finish(FINISH_SUCCESS);
-                    return;
-                }
-            }
-        } else {
+        if (g_task_state != TASK_KEY2_A_TO_B) {
             /* KEY1/KEY3：检测到右转特征则进入弧线 */
             if (should_enter_arc_straight_to_arc(pattern)) {
                 task_enter_phase(ROUTE_BC_ARC);
@@ -757,9 +738,6 @@ void task_init(void)
     g_cd_da_switch_source = 0U;
     g_key2_stop_source = 0U;
     g_cd_last_distance_cm = 0.0f;
-    g_key2_start_ramp_done = true;
-    g_key2_post_detect_active = false;
-    g_key2_post_detect_start_ms = 0U;
     g_key3_start_ramp_done = true;
     g_left_extra_wait_start_ms = 0U;
     g_left_extra_start_count = 0;
@@ -828,12 +806,15 @@ void task_step(void)
     g_task_elapsed_ms = motor_millis() - g_task_start_ms;
     number_show_time_ms(g_task_elapsed_ms);
     task_update_yaw();
-    task_update_key2_start_ramp();
+    task_update_key2_acceleration();
     task_update_key3_start_ramp();
 
     /* 超时保护 */
     timeout = task_timeout_ms();
     if ((timeout != 0U) && (g_task_elapsed_ms >= timeout)) {
+        if (g_task_state == TASK_KEY2_A_TO_B) {
+            g_key2_stop_source = 3U;
+        }
         task_finish(FINISH_TIMEOUT);
         return;
     }

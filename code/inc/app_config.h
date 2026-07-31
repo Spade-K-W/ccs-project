@@ -43,16 +43,15 @@
 
 /* KEY1/KEY3整车速度比例 */
 #define TASK_NORMAL_SPEED_PERCENT        (100U)
-#define TASK_SLOW_SPEED_PERCENT          (70U)
-#define TASK_KEY2_SPEED_PERCENT          (85U) /* 5s内由0线性加速到该比例 */
+#define TASK_SLOW_SPEED_PERCENT          (74U) /* KEY3提速约6%，目标整圈约29.5s */
+#define TASK_KEY2_SPEED_PERCENT          (98U) /* 原85%的加速度提高15%，5s时约97.75% */
 #define TASK_KEY2_START_SPEED_PERCENT    (0U)
 #define TASK_KEY2_START_RAMP_MS          (5000U)
-#define TASK_KEY2_STOP_ARM_MS            (1000U) /* 忽略起点A横线 */
-#define TASK_KEY2_STOP_MASK              (0xC0U) /* bit6=X7, bit7=X8 */
-#define TASK_KEY2_POST_DETECT_RUN_MS     (300U)
-/* KEY3按键启动后，从该速度比例线性加速到TASK_SLOW_SPEED_PERCENT。 */
+/* KEY3各段速度匹配：30*69%≈28*74%。 */
 #define TASK_KEY3_START_SPEED_PERCENT    (0U)
-#define TASK_KEY3_START_RAMP_MS          (1500U)
+#define TASK_KEY3_AB_TARGET_PERCENT      (69U)
+#define TASK_KEY3_CD_SPEED_PERCENT       (69U) /* CD保持恒速并匹配BC/DA */
+#define TASK_KEY3_START_RAMP_MS          (7000U)
 
 /* 任务超时、OLED刷新和顺时针右弧方向 */
 #define TASK_KEY1_TIMEOUT_MS             (30000U)
@@ -371,9 +370,9 @@
 #define ARC_ENTRY_RAMP_MS_KEY3      (600U)
 /* KEY3弧线每个10ms周期的单轮目标PWM最大变化量。 */
 #define ARC_SPEED_SLEW_STEP_KEY3    (1.8)
-/* KEY3进入DA后，在该时间内把左右轮目标各自逐渐降低指定PWM。 */
+/* KEY3的BC、DA保持相同弧线速度，不再对DA单独减速。 */
 #define ARC_DA_SLOWDOWN_RAMP_MS_KEY3 (1000U)
-#define ARC_DA_SPEED_REDUCTION_KEY3  (3)
+#define ARC_DA_SPEED_REDUCTION_KEY3  (0)
 /*
  * 进入弧线阶段后，先用普通红外巡线直行该时长；
  * 到时后才加入 ARC_CURVE_BIAS 和 ARC_ENTER_TURN_BIAS。

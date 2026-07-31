@@ -104,11 +104,6 @@ static int16_t drive_scale_speed(int16_t speed)
 
 void app_task_set_speed_percent(uint8_t percent)
 {
-    if (percent < 1U) {
-        percent = 1U;
-    } else if (percent > 100U) {
-        percent = 100U;
-    }
     g_driveSpeedPercent = percent;
 }
 
