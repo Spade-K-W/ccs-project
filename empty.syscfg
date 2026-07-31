@@ -261,8 +261,9 @@ UART1.peripheral.txPin.$assign = "PA10";
 UART1.txPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric6";
 UART1.rxPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric7";
 
-UART2.$name                            = "Bluetooth_UART_1";
 UART2.targetBaudRate                   = 115200;
+UART2.$name                            = "TI_UART";
+UART2.peripheral.$assign               = "UART1";
 UART2.peripheral.rxPin.$assign         = "PA9";
 UART2.peripheral.txPin.$assign         = "PB4";
 UART2.txPinConfig.direction            = scripting.forceWrite("OUTPUT");
@@ -290,4 +291,3 @@ PWM1.peripheral.$suggestSolution             = "TIMA1";
 SPI2.peripheral.$suggestSolution             = "SPI0";
 SYSCTL.peripheral.$suggestSolution           = "SYSCTL";
 UART1.peripheral.$suggestSolution            = "UART0";
-UART2.peripheral.$suggestSolution            = "UART1";

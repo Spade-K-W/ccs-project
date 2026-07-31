@@ -27,24 +27,23 @@
 
 /* MPU转角与整圈停车角度 */
 #define TASK_ARC_YAW_DEG                 (180.0f)
-#define TASK_KEY1_TARGET_YAW_DEG         (350.0f)
+#define TASK_KEY1_TARGET_YAW_DEG         (360.0f)
 #define TASK_KEY3_TARGET_YAW_DEG         (350.0f)
-#define TASK_LEFT_EXTRA_WAIT_MS          (500U)
-#define TASK_LEFT_EXTRA_WHEEL_PULSES     (133U)  /* 530脉冲/圈的1/4圈 */
-#define TASK_LEFT_EXTRA_WHEEL_SPEED      (18)
+#define TASK_LEFT_EXTRA_WAIT_MS          (0U)
+#define TASK_KEY1_REAR_BACKWARD_WHEEL_PULSES (266U) /* 原133脉冲的2倍 */
+#define TASK_KEY1_REAR_EXTRA_WHEEL_SPEED (65)
+#define TASK_KEY3_LEFT_COAST_MS           (200U)
 
 /* 直线段红外解锁和编码器保护距离 */
 #define TASK_STRAIGHT_DISTANCE_MAX_CM    (220.0f)
 #define TASK_AB_TURN_ARM_DISTANCE_CM     (90.0f)
 #define TASK_CD_TURN_ARM_DISTANCE_CM     (110.0f)
 #define TASK_AB_ARC_PREP_DISTANCE_CM     (220.0f)
-#define TASK_CD_SLOWDOWN_DISTANCE_CM     (125.0f)
 #define TASK_CD_ARC_PREP_DISTANCE_CM     (170.0f)
 
-/* KEY1/KEY3整车速度比例和CD末段降速量 */
+/* KEY1/KEY3整车速度比例 */
 #define TASK_NORMAL_SPEED_PERCENT        (100U)
 #define TASK_SLOW_SPEED_PERCENT          (70U)
-#define TASK_CD_SPEED_REDUCTION          (5U)
 #define TASK_KEY2_SPEED_PERCENT          (85U) /* 5s内由0线性加速到该比例 */
 #define TASK_KEY2_START_SPEED_PERCENT    (0U)
 #define TASK_KEY2_START_RAMP_MS          (5000U)
@@ -52,20 +51,23 @@
 #define TASK_KEY2_STOP_MASK              (0xC0U) /* bit6=X7, bit7=X8 */
 #define TASK_KEY2_POST_DETECT_RUN_MS     (300U)
 /* KEY3按键启动后，从该速度比例线性加速到TASK_SLOW_SPEED_PERCENT。 */
-#define TASK_KEY3_START_SPEED_PERCENT    (40U)
-#define TASK_KEY3_START_RAMP_MS          (600U)
+#define TASK_KEY3_START_SPEED_PERCENT    (0U)
+#define TASK_KEY3_START_RAMP_MS          (1500U)
 
 /* 任务超时、OLED刷新和顺时针右弧方向 */
 #define TASK_KEY1_TIMEOUT_MS             (30000U)
 #define TASK_KEY2_TIMEOUT_MS             (8000U)
 #define TASK_KEY3_TIMEOUT_MS             (40000U)
 #define TASK_DISPLAY_PERIOD_MS           (100U)
+#define UART_KEY_OLED_NOTICE_MS           (2000U) /* 按键发送结果在OLED上保留2秒 */
 #define TASK_ARC_MIRROR_DIR              (-1.0f)
 
 /* =========================================================
  * 外设电平逻辑配置
  * ========================================================= */
 #define LINE_SENSOR_ACTIVE_LOW      (1U)  /* YB-MUX04：压到黑线时 X1~X8 输出低电平 */
+#define LINE_SENSOR_STATIC_TEST_ENABLE (0U) /* 1=OLED八路静态测试且禁用电机，0=正常任务 */
+#define LINE_SENSOR_IGNORE_MASK       (0x08U) /* bit3=X4，故障通道统一屏蔽 */
 #define BUZZER_ACTIVE_HIGH          (1U)  /* 1=高电平发声，低电平静音 */
 #define BOARD_LED_ACTIVE_HIGH       (1U)
 
@@ -118,8 +120,8 @@
 /* 串口调试数据发送间隔 */
 #define UART_DEBUG_PRINT_INTERVAL_MS (50U)   /* 串口 0.05s 输出一次（仅转弯） */
 
-/* 蓝牙透传（Bluetooth_UART_1：RX=PA9，TX=PB4）：主循环调用，按间隔发 OLED 六行 */
-#define BLUETOOTH_ENABLE             (1U)
+/* UART通信（TI_UART：RX=PA9，TX=PB4） */
+#define BLUETOOTH_ENABLE             (0U)  /* UART1仅发送按键字符，关闭OLED周期透传 */
 #define BLUETOOTH_SEND_INTERVAL_MS   (20U)
 /* 上电握手：周期广播 BT_READY，收到对端 BT_READY/BT_ACK 即视为链路 OK */
 #define BLUETOOTH_HANDSHAKE_RETRY_MS (500U)  /* 每轮听 500ms，避免半帧被冲掉 */
@@ -201,7 +203,7 @@
 #define LINE_WEIGHT_STRAIGHT_CH2    (-3.0f)
 #define LINE_WEIGHT_STRAIGHT_CH3    (-2.5f)
 #define LINE_WEIGHT_STRAIGHT_CH4    (-1.5f)
-#define LINE_WEIGHT_STRAIGHT_CH5    (1.5f)
+#define LINE_WEIGHT_STRAIGHT_CH5    (0.0f)
 #define LINE_WEIGHT_STRAIGHT_CH6    (2.5f)
 #define LINE_WEIGHT_STRAIGHT_CH7    (3.0f)
 #define LINE_WEIGHT_STRAIGHT_CH8    (4.5f)
@@ -353,9 +355,9 @@
 
 #define KP_LINE_ARC                 (14.4f) /* 偏线时再加大拧弯 */
 #define KD_LINE_ARC                 (0.2f)
-#define KP_LINE_ARC_KEY3_BC         (12.0f)
-#define KP_LINE_ARC_KEY3_DA         (15.5f)
-#define KD_LINE_ARC_KEY3            (0.0f)
+#define KP_LINE_ARC_KEY3_BC         (9.0f)//转弯的KP和KD
+#define KP_LINE_ARC_KEY3_DA         (9.5f)
+#define KD_LINE_ARC_KEY3            (0.005f)
 #define LINE_ERROR_DEADZONE_ARC     (0.25f)
 #define LINE_ERROR_FILTER_ALPHA_ARC (0.40f)
 #define KD_GYRO_ARC                 (0.00f)

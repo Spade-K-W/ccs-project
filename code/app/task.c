@@ -1,5 +1,6 @@
 #include "task.h"
 #include "app_config.h"
+#include "bluetooth.h"
 #include "key.h"
 #include "app_task.h"
 #include "encoder.h"
@@ -38,7 +39,8 @@ typedef enum {
     ROUTE_CD_STRAIGHT,
     ROUTE_DA_ARC,
     ROUTE_LEFT_WHEEL_WAIT,
-    ROUTE_LEFT_WHEEL_EXTRA
+    ROUTE_KEY1_REAR_WHEELS_BACKWARD,
+    ROUTE_KEY3_LEFT_COAST
 } RoutePhase;
 
 typedef enum {
@@ -54,6 +56,8 @@ static RoutePhase g_route_phase = ROUTE_AB_STRAIGHT;
 static uint32_t g_task_start_ms = 0U;
 static uint32_t g_task_elapsed_ms = 0U;
 static uint32_t g_display_last_ms = 0U;
+static uint32_t g_uart_notice_start_ms = 0U;
+static uint8_t g_uart_notice_key = 0U;
 
 /* 陀螺仪相关 */
 static float g_yaw_last_deg = 0.0f;
@@ -72,7 +76,6 @@ static uint8_t g_turn_pattern_frame_4 = 0U;        /* 前4帧目标通道 */
 static uint8_t g_turn_pattern_frame_5 = 0U;        /* 前5帧目标通道 */
 static uint8_t g_turn_pattern_frame_6 = 0U;        /* 前6帧目标通道 */
 static uint8_t g_line_lost_cnt = 0U;                /* 丢线连续计数 */
-static bool g_cd_slowdown_applied = false;
 static uint8_t g_ab_bc_switch_source = 0U;          /* 1=红外，2=编码器保护 */
 static uint8_t g_cd_da_switch_source = 0U;          /* 1=红外，2=编码器保护 */
 static uint8_t g_key2_stop_source = 0U;             /* 1=红外B点，2=编码器保护 */
@@ -83,8 +86,46 @@ static uint32_t g_key2_post_detect_start_ms = 0U;
 static bool g_key3_start_ramp_done = true;
 static uint32_t g_left_extra_wait_start_ms = 0U;
 static int32_t g_left_extra_start_count = 0;
+static int32_t g_right_extra_start_count = 0;
+static uint32_t g_key3_left_coast_start_ms = 0U;
+static int16_t g_key3_left_coast_speed = 0;
 
 /* 辅助函数 */
+#if LINE_SENSOR_STATIC_TEST_ENABLE
+static void task_static_line_sensor_test(void)
+{
+    static uint8_t last_pattern = 0U;
+    static bool first_refresh = true;
+    uint8_t pattern = line_read_pattern();
+    uint8_t i;
+    char bit_line[] = "B:0 0 0 0 0 0 0 0";
+    char hex_line[22];
+
+    chassis_stop();
+    motor_driver_disable();
+
+    if ((!first_refresh) && (pattern == last_pattern)) {
+        return;
+    }
+    first_refresh = false;
+    last_pattern = pattern;
+
+    for (i = 0U; i < 8U; i++) {
+        bit_line[2U + (2U * i)] =
+            ((pattern & (uint8_t)(1U << i)) != 0U) ? '1' : '0';
+    }
+
+    snprintf(hex_line, sizeof(hex_line), "Pattern:0x%02X     ",
+             (unsigned int)pattern);
+    oled_display_string(0, 0, "LINE STATIC TEST");
+    oled_display_string(1, 0, "X:1 2 3 4 5 6 7 8");
+    oled_display_string(2, 0, bit_line);
+    oled_display_string(3, 0, hex_line);
+    oled_display_string(5, 0, "BLACK=1 WHITE=0");
+    oled_display_string(7, 0, "MOTOR DISABLED");
+}
+#endif
+
 static float abs_f(float value)
 {
     return (value >= 0.0f) ? value : -value;
@@ -95,13 +136,6 @@ static float task_segment_distance_cm(void)
     float distance = encoder_pulses_to_cm(
         (float)encoder_get_vehicle_pos_pulses());
     return abs_f(distance);
-}
-
-static uint8_t task_normal_speed_percent(void)
-{
-    return (g_task_state == TASK_KEY3_SLOW_LAP)
-        ? TASK_SLOW_SPEED_PERCENT
-        : TASK_NORMAL_SPEED_PERCENT;
 }
 
 static void task_update_key2_start_ramp(void)
@@ -158,43 +192,6 @@ static void task_update_key3_start_ramp(void)
         + (((target_percent - start_percent) * g_task_elapsed_ms)
            / (uint32_t)TASK_KEY3_START_RAMP_MS);
     app_task_set_speed_percent((uint8_t)speed_percent);
-}
-
-static uint8_t task_cd_slow_speed_percent(void)
-{
-    uint32_t normal_percent = task_normal_speed_percent();
-    uint32_t normal_speed =
-        ((uint32_t)BASE_SPEED_STRAIGHT * normal_percent) / 100U;
-    uint32_t target_speed;
-    uint32_t target_percent;
-
-    if (normal_speed > TASK_CD_SPEED_REDUCTION) {
-        target_speed = normal_speed - TASK_CD_SPEED_REDUCTION;
-    } else {
-        target_speed = 1U;
-    }
-
-    target_percent =
-        ((target_speed * 100U) + (uint32_t)BASE_SPEED_STRAIGHT - 1U)
-        / (uint32_t)BASE_SPEED_STRAIGHT;
-
-    if (target_percent < 1U) {
-        target_percent = 1U;
-    } else if (target_percent > 100U) {
-        target_percent = 100U;
-    }
-
-    return (uint8_t)target_percent;
-}
-
-static void task_apply_cd_slowdown(void)
-{
-    if (!g_cd_slowdown_applied) {
-        if (g_task_state != TASK_KEY3_SLOW_LAP) {
-            app_task_set_speed_percent(task_cd_slow_speed_percent());
-        }
-        g_cd_slowdown_applied = true;
-    }
 }
 
 static float task_phase_yaw_deg(void)
@@ -354,6 +351,34 @@ static bool should_stop_at_B_point(uint8_t pattern)
 
 /* ========== UI显示 ========== */
 
+static void task_show_uart_sent(uint8_t key)
+{
+    char line[22];
+
+    if ((key < 1U) || (key > 3U)) {
+        return;
+    }
+
+    snprintf(line, sizeof(line), "SENT:'%u'            ",
+             (unsigned int)key);
+    oled_display_string(5U, 0U, line);
+    g_uart_notice_key = key;
+    g_uart_notice_start_ms = motor_millis();
+}
+
+static void task_update_uart_sent(void)
+{
+    if (g_uart_notice_key == 0U) {
+        return;
+    }
+
+    if ((motor_millis() - g_uart_notice_start_ms)
+        >= (uint32_t)UART_KEY_OLED_NOTICE_MS) {
+        oled_display_string(5U, 0U, "                     ");
+        g_uart_notice_key = 0U;
+    }
+}
+
 static uint32_t task_timeout_ms(void)
 {
     switch (g_task_state) {
@@ -425,10 +450,7 @@ static void task_enter_phase(RoutePhase next)
     reset_right_turn_detect();
     g_line_lost_cnt = 0U;
 
-    if (next == ROUTE_DA_ARC) {
-        /* 红外提前触发DA时，也必须先应用CD末段降速。 */
-        task_apply_cd_slowdown();
-    } else if (next == ROUTE_CD_STRAIGHT) {
+    if (next == ROUTE_CD_STRAIGHT) {
         g_cd_last_distance_cm = 0.0f;
     }
 
@@ -468,7 +490,6 @@ static void task_start(TaskState state)
     /* 重置红外检测 */
     reset_right_turn_detect();
     g_line_lost_cnt = 0U;
-    g_cd_slowdown_applied = false;
     g_ab_bc_switch_source = 0U;
     g_cd_da_switch_source = 0U;
     g_key2_stop_source = 0U;
@@ -481,6 +502,9 @@ static void task_start(TaskState state)
     g_key2_post_detect_start_ms = 0U;
     g_left_extra_wait_start_ms = 0U;
     g_left_extra_start_count = 0;
+    g_right_extra_start_count = 0;
+    g_key3_left_coast_start_ms = 0U;
+    g_key3_left_coast_speed = 0;
     g_key3_start_ramp_done =
         (state != TASK_KEY3_SLOW_LAP)
         || (TASK_KEY3_START_RAMP_MS == 0U)
@@ -511,6 +535,8 @@ static void task_finish(FinishReason reason)
 
     g_key2_post_detect_active = false;
     g_left_extra_wait_start_ms = 0U;
+    g_key3_left_coast_start_ms = 0U;
+    g_key3_left_coast_speed = 0;
     chassis_stop();
     number_show_time_ms(g_task_elapsed_ms);
     g_task_state = TASK_FINISHED;
@@ -519,16 +545,18 @@ static void task_finish(FinishReason reason)
     task_show_switch_sources();
 }
 
-static void task_begin_left_wheel_extra(void)
+static void task_begin_key1_rear_wheels_backward(void)
 {
     EncoderCounts counts;
 
     encoder_get_counts(&counts);
     g_left_extra_start_count = counts.leftCount;
-    g_route_phase = ROUTE_LEFT_WHEEL_EXTRA;
+    g_right_extra_start_count = counts.rightCount;
+    g_route_phase = ROUTE_KEY1_REAR_WHEELS_BACKWARD;
 
-    /* 物理左侧M3/M4前进，物理右侧M1/M2停止。 */
-    chassis_set((int16_t)TASK_LEFT_EXTRA_WHEEL_SPEED, 0);
+    /* M1右后轮与M4左后轮同时后退，PWM与前一动作相同。 */
+    chassis_set4(-(int16_t)TASK_KEY1_REAR_EXTRA_WHEEL_SPEED, 0, 0,
+                 -(int16_t)TASK_KEY1_REAR_EXTRA_WHEEL_SPEED);
 }
 
 static void task_begin_left_wheel_wait(void)
@@ -536,6 +564,16 @@ static void task_begin_left_wheel_wait(void)
     g_left_extra_wait_start_ms = g_task_elapsed_ms;
     g_route_phase = ROUTE_LEFT_WHEEL_WAIT;
     chassis_stop();
+}
+
+static void task_begin_key3_left_coast(void)
+{
+    line_follow_get_out_wheels(&g_key3_left_coast_speed, NULL);
+    g_key3_left_coast_start_ms = g_task_elapsed_ms;
+    g_route_phase = ROUTE_KEY3_LEFT_COAST;
+
+    /* 左前轮M3、左后轮M4保持当前实际PWM，右侧两轮停止。 */
+    chassis_set(g_key3_left_coast_speed, 0);
 }
 
 /* ========== 核心路线执行逻辑 ========== */
@@ -600,10 +638,6 @@ static void task_run_route(void)
         /* 直线阶段：红外特征优先，编码器保护 */
         g_cd_last_distance_cm = task_segment_distance_cm();
 
-        if (g_cd_last_distance_cm >= TASK_CD_SLOWDOWN_DISTANCE_CM) {
-            task_apply_cd_slowdown();
-        }
-
         if (should_enter_arc_straight_to_arc(pattern)) {
             task_enter_phase(ROUTE_DA_ARC);
             return;
@@ -626,9 +660,9 @@ static void task_run_route(void)
                 return;
             }
         } else {
-            /* KEY3：累计转角达到350度后，左轮再转1/4圈。 */
+            /* KEY3：累计转角达到目标后，左侧两轮保持当前转速0.2秒。 */
             if (abs_f(g_yaw_accum_deg) >= TASK_KEY3_TARGET_YAW_DEG) {
-                task_begin_left_wheel_wait();
+                task_begin_key3_left_coast();
                 return;
             }
         }
@@ -645,28 +679,55 @@ static void task_run_route(void)
         chassis_stop();
         if ((g_task_elapsed_ms - g_left_extra_wait_start_ms)
             >= (uint32_t)TASK_LEFT_EXTRA_WAIT_MS) {
-            task_begin_left_wheel_extra();
+            task_begin_key1_rear_wheels_backward();
         }
         break;
 
-    case ROUTE_LEFT_WHEEL_EXTRA:
+    case ROUTE_KEY1_REAR_WHEELS_BACKWARD:
         {
             EncoderCounts counts;
-            int32_t delta;
+            int32_t leftDelta;
+            int32_t rightDelta;
+            bool leftDone;
+            bool rightDone;
 
             encoder_get_counts(&counts);
-            delta = counts.leftCount - g_left_extra_start_count;
-            if (delta < 0) {
-                delta = -delta;
+            leftDelta = counts.leftCount - g_left_extra_start_count;
+            rightDelta = counts.rightCount - g_right_extra_start_count;
+            if (leftDelta < 0) {
+                leftDelta = -leftDelta;
+            }
+            if (rightDelta < 0) {
+                rightDelta = -rightDelta;
             }
 
-            if ((uint32_t)delta >= TASK_LEFT_EXTRA_WHEEL_PULSES) {
+            leftDone =
+                ((uint32_t)leftDelta >= TASK_KEY1_REAR_BACKWARD_WHEEL_PULSES);
+            rightDone =
+                ((uint32_t)rightDelta >= TASK_KEY1_REAR_BACKWARD_WHEEL_PULSES);
+
+            if (leftDone && rightDone) {
                 task_finish(FINISH_SUCCESS);
                 return;
             }
 
-            chassis_set((int16_t)TASK_LEFT_EXTRA_WHEEL_SPEED, 0);
+            chassis_set4(
+                rightDone ? 0
+                          : -(int16_t)TASK_KEY1_REAR_EXTRA_WHEEL_SPEED,
+                0,
+                0,
+                leftDone ? 0
+                         : -(int16_t)TASK_KEY1_REAR_EXTRA_WHEEL_SPEED);
         }
+        break;
+
+    case ROUTE_KEY3_LEFT_COAST:
+        if ((g_task_elapsed_ms - g_key3_left_coast_start_ms)
+            >= (uint32_t)TASK_KEY3_LEFT_COAST_MS) {
+            task_finish(FINISH_SUCCESS);
+            return;
+        }
+        chassis_set(g_key3_left_coast_speed, 0);
         break;
 
     default:
@@ -684,6 +745,8 @@ void task_init(void)
     g_task_start_ms = 0U;
     g_task_elapsed_ms = 0U;
     g_display_last_ms = 0U;
+    g_uart_notice_start_ms = 0U;
+    g_uart_notice_key = 0U;
     g_yaw_last_deg = 0.0f;
     g_yaw_accum_deg = 0.0f;
     g_phase_start_yaw_deg = 0.0f;
@@ -700,12 +763,21 @@ void task_init(void)
     g_key3_start_ramp_done = true;
     g_left_extra_wait_start_ms = 0U;
     g_left_extra_start_count = 0;
+    g_right_extra_start_count = 0;
+    g_key3_left_coast_start_ms = 0U;
+    g_key3_left_coast_speed = 0;
     pid_set_second_arc_profile(false);
     app_task_set_second_arc(false);
 
     chassis_stop();
     app_task_set_oled_debug_enabled(false);
+#if LINE_SENSOR_STATIC_TEST_ENABLE
+    motor_driver_disable();
+    oled_clear();
+    task_static_line_sensor_test();
+#else
     task_show_select();
+#endif
 }
 
 void task_step(void)
@@ -713,9 +785,19 @@ void task_step(void)
     uint8_t key;
     uint32_t timeout;
 
+    task_update_uart_sent();
+
+#if LINE_SENSOR_STATIC_TEST_ENABLE
+    task_static_line_sensor_test();
+    return;
+#endif
+
     if ((g_task_state == TASK_IDLE)
         || (g_task_state == TASK_FINISHED)) {
         key = key_scan();
+
+        /* 每次有效按键只发送一个字符：'1'、'2' 或 '3'。 */
+        bluetooth_send_key(key);
 
         switch (key) {
         case 1U:
@@ -730,13 +812,16 @@ void task_step(void)
         default:
             break;
         }
+        task_show_uart_sent(key);
         return;
     }
 
     /* 运行中按键停止 */
     key = key_scan();
     if (key != 0U) {
+        bluetooth_send_key(key);
         task_finish(FINISH_CANCELLED);
+        task_show_uart_sent(key);
         return;
     }
 

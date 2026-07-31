@@ -565,7 +565,6 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     } else if (steer < -(int16_t)ARC_DIFF_MAX) {
         steer = -(int16_t)ARC_DIFF_MAX;
     }
-
     if (leftArc) {
         if (steer > -keepMin) {
             steer = -keepMin;
@@ -604,7 +603,6 @@ void line_follow_arc(uint8_t pattern, float error, bool lineValid)
     if (spdR < 0) {
         spdR = 0;
     }
-
     if (pid_is_key3_profile()) {
         spdL = arc_slew_speed(g_arcSlewLeft, spdL,
                               (int16_t)ARC_SPEED_SLEW_STEP_KEY3);

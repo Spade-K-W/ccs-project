@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 /*
- * 蓝牙透传：SysConfig Bluetooth_UART_1
+ * UART通信：SysConfig TI_UART
  *   RX = PA9，TX = PB4（115200）
  * 本板作发送端，把 OLED 六行状态发给另一块 TI 板。
  */
@@ -16,6 +16,9 @@ void bluetooth_init(void);
 void bluetooth_putc(char c);
 void bluetooth_puts(const char *s);
 void bluetooth_write(const char *data, size_t len);
+
+/* 按键通信：发送单个 ASCII 字符 '1'、'2' 或 '3'，不附加换行。 */
+void bluetooth_send_key(uint8_t key);
 
 /* 缓存当前 OLED 六行（由 app_task 刷新 UI 时调用） */
 void bluetooth_cache_oled_status(const UartDebugStatus *st);

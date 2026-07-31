@@ -7,12 +7,12 @@
 #include <string.h>
 #include <stdbool.h>
 
-/* SysConfig：Bluetooth_UART_1，RX=PA9，TX=PB4，115200 */
-#ifndef Bluetooth_UART_1_INST
-#error "Bluetooth_UART_1_INST not defined — check SysConfig Bluetooth_UART_1 (PA9/PB4)"
+/* SysConfig：TI_UART，RX=PA9，TX=PB4，115200 */
+#ifndef TI_UART_INST
+#error "TI_UART_INST not defined - check SysConfig TI_UART (PA9/PB4)"
 #endif
 
-#define BT_UART_INST Bluetooth_UART_1_INST
+#define BT_UART_INST TI_UART_INST
 
 static UartDebugStatus s_oledCache;
 static uint8_t s_oledCacheValid;
@@ -54,6 +54,13 @@ void bluetooth_write(const char *data, size_t len)
 
     for (i = 0U; i < len; i++) {
         bluetooth_putc(data[i]);
+    }
+}
+
+void bluetooth_send_key(uint8_t key)
+{
+    if ((key >= 1U) && (key <= 3U)) {
+        bluetooth_putc((char)('0' + key));
     }
 }
 

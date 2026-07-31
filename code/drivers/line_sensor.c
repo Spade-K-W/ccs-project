@@ -40,6 +40,7 @@ uint8_t line_read_pattern(void)
         }
     }
 
+    pattern &= (uint8_t)(~(uint8_t)LINE_SENSOR_IGNORE_MASK);
     return pattern;
 }
 
